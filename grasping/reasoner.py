@@ -21,7 +21,7 @@ def get_collisionfree_graspids(hnd, grasp_info_list, goal_info, obstacle_list):
 
 def get_common_collisionfree_graspids(hnd, grasp_info_list, goal_info_list, obstacle_list):
     """
-    get the common collisionfree graspids from a list of [goal_pos, goal_rotmat] and obstacle_list
+    get the common collisionfree graspids from a list of [goal_pos, goal_rotmat] and obs_list
     :param hnd:
     :param grasp_info_list:
     :param goal_info_list: [[goal_pos, goal_rotmat], ...]

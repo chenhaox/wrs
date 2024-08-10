@@ -72,7 +72,7 @@ class PickPlacePlanner(object):
         np = self.rhx.np
         rm = self.rhx.rm
         if armname is "lft":
-            hndfa = self.rhx.lfthndfa
+            hndfa = self.rhx.lft_hnd
         # start pose
         objcmcopy.set_homomat(inithomomat)
         ikfailedgraspsnum = 0
@@ -257,7 +257,7 @@ class PickPlacePlanner(object):
         np = self.rhx.np
         rm = self.rhx.rm
         if armname is "lft":
-            hndfa = self.rhx.lfthndfa
+            hndfa = self.rhx.lft_hnd
         # start pose
         objcmcopy.set_homomat(inithomomat)
         ikfailedgraspsnum = 0
@@ -513,7 +513,7 @@ class PickPlacePlanner(object):
                 raise ValueError("")
 
         rbt = self.rhx.robot_s
-        hndfa = self.rhx.rgthndfa if armname is "rgt" else self.rhx.lfthndfa
+        hndfa = self.rhx.rgthndfa if armname is "rgt" else self.rhx.lft_hnd
         predefinedgrasps = self.identityglist_rgt if armname is "rgt" else self.identityglist_lft
         bk_armjnts_rgt = rbt.getarmjnts(armname="rgt")
         bk_armjnts_lft = rbt.getarmjnts(armname="lft")
@@ -826,7 +826,7 @@ class PickPlacePlanner(object):
         rbt.opengripper(armname="rgt")
         rbt.opengripper(armname="lft")
         rbtmg = self.rhx.rbtmesh
-        hndfa = self.rhx.rgthndfa if armname is "rgt" else self.rhx.lfthndfa
+        hndfa = self.rhx.rgthndfa if armname is "rgt" else self.rhx.lft_hnd
         predefinedgrasps = self.identityglist_rgt if armname is "rgt" else self.identityglist_lft
         pcdchecker = self.rhx.pcdchecker
         bcdchecker = self.rhx.bcdchecker

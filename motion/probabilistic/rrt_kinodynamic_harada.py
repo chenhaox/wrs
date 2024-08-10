@@ -194,7 +194,7 @@ class RRTKinodynamic(object):
     #                     roadmap,
     #                     conf,
     #                     goal_state,
-    #                     obstacle_list=[],
+    #                     obs_list=[],
     #                     otherrobot_list=[],
     #                     animation=False):
     #     """
@@ -208,7 +208,7 @@ class RRTKinodynamic(object):
     #     print("near state ", roadmap.nodes[nearest_nid]['conf'])
     #     print("new state ", new_state)
     #     if new_state is not None:
-    #         if self._is_collided(component_name, new_state, obstacle_list, otherrobot_list):
+    #         if self._is_collided(component_name, new_state, obs_list, otherrobot_list):
     #             return nearest_nid
     #         else:
     #             new_nid = random.randint(0, 1e8)
@@ -217,7 +217,7 @@ class RRTKinodynamic(object):
     #             # all_sampled_confs.append([new_node.point, False])
     #             if animation:
     #                 self.draw_sspace([roadmap], self.start_state, self.goal_state,
-    #                                  obstacle_list, [roadmap.nodes[nearest_nid]['conf'], conf],
+    #                                  obs_list, [roadmap.nodes[nearest_nid]['conf'], conf],
     #                                  new_state, None)
     #             # check goal
     #             if self.kds.goal_test_callback(roadmap.nodes[new_nid]['conf'], goal_state):

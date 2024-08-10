@@ -146,7 +146,7 @@ print(jnt_values_initial, jnt_values)
 #         jnt_values[2] = math.pi
 #         robot_s.fk(component_name="agv", jnt_values=jnt_values)
 #         # check if the rbt_s is collided or not at the place
-#         if robot_s.is_collided(obstacle_list=obstacle_list):
+#         if robot_s.is_collided(obs_list=obs_list):
 #             print("1")
 #             continue
 #         else:
@@ -159,7 +159,7 @@ print(jnt_values_initial, jnt_values)
 #                 armjnts = robot_s.ik(component_name="arm", tgt_pos=first_jaw_center_pos, tgt_rotmat=first_jaw_center_rotmat)
 #                 if armjnts is not None:
 #                     robot_s.fk(component_name="arm", jnt_values=armjnts)
-#                     is_robot_collided = robot_s.is_collided(obstacle_list=obstacle_list)
+#                     is_robot_collided = robot_s.is_collided(obs_list=obs_list)
 #                     # display only if armjnts is not None and rbt_s is not collided
 #                     if is_robot_collided is False and counter is 0:
 #                         dist_pos.append(jnt_values)
@@ -285,7 +285,7 @@ for dict_goal_pos in dist_pos:
     #     path = rrtc_planner.plan(component_name="agv",
     #                                      start_conf=jnt_values_initial[:3],
     #                                      goal_conf=dict_goal_pos,
-    #                                      obstacle_list=[],
+    #                                      obs_list=[],
     #                                      otherrobot_list=[],
     #                                      ext_dist=.05,
     #                                      max_iter=300,

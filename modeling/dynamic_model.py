@@ -34,7 +34,7 @@ class DynamicModel(gm.GeometricModel):
         #     self.__objbdb = initor.objbdb.copy()
         #     base.physicsworld.attach(self.__objbdb)
         # else:
-        super().__init__(initor.objcm, btransparency=betransparency, type=cm_cdtype, cm_expradius=None,
+        super().__init__(initor.obj_cm, btransparency=betransparency, type=cm_cdtype, cm_expradius=None,
                          name="defaultname")
         if mass is None:
             mass = 0

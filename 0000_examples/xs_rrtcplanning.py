@@ -14,7 +14,7 @@ gm.gen_frame().attach_to(base)
 object = cm.CollisionModel("./objects/bunnysim.stl")
 object.set_pos(np.array([.85, 0, .57]))
 object.set_rgba([.5,.7,.5,1])
-object.attach_to(base)
+# object.attach_to(base)
 # robot_s
 component_name='arm'
 rbt_s = xss.XArmShuidi()

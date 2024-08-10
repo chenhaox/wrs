@@ -500,7 +500,7 @@ if __name__ == '__main__':
     #                                       approach_distance_list=[.2] * len(goal_homomat_list),
     #                                       ad_granularity=.003,
     #                                       use_rrt=True,
-    #                                       obstacle_list=[],
+    #                                       obs_list=[],
     #                                       seed_jnt_values=start_conf)
     #     print(robot_s.rgt_oih_infos, robot_s.lft_oih_infos)
     #     if conf_list is not None:

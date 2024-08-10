@@ -9,7 +9,7 @@ import math
 import basis.robot_math as rm
 import numpy as np
 
-base = wd.World(cam_pos=np.array([2, 0, 2]), lookat_pos=np.array([0, 0, 0]), toggle_debug=False)
+base = wd.World(cam_pos=np.array([2, 0, 2]), lookat_pos=np.array([0, 0, 0]), toggle_debug=True)
 # PlaneD
 homomat = np.eye(4)
 homomat[:3, 3] = np.array([0, 0, -.05])

@@ -33,11 +33,11 @@ class HandoverPlanner(object):
         with open(os.path.join(rhx.root, "grasp" + rhx.rgthndfa.name, "predefinedgrasps.pickle"), "rb") as file:
             graspdata = pickle.load(file)
             self.identityglist_rgt = graspdata[self.objname]
-        with open(os.path.join(rhx.root, "grasp" + rhx.lfthndfa.name, "predefinedgrasps.pickle"), "rb") as file:
+        with open(os.path.join(rhx.root, "grasp" + rhx.lft_hnd.name, "predefinedgrasps.pickle"), "rb") as file:
             graspdata = pickle.load(file)
             self.identityglist_lft = graspdata[self.objname]
         self.rgthndfa = rhx.rgthndfa
-        self.lfthndfa = rhx.lfthndfa
+        self.lfthndfa = rhx.lft_hnd
 
         # paramters
         self.fpsnpmat4 = []

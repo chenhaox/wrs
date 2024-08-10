@@ -14,7 +14,7 @@ mcn_s.fk(np.array([math.pi/60]))
 mcn_s.gen_meshmodel().attach_to(base)
 rbt_s = rbt.TBMChanger7R(pos=np.array([-1.726-0.35, 2.624-0.275, 5.323]))
 # rbt_s.gen_meshmodel(toggle_tcpcs=True).attach_to(base)
-# ik_s = opt_ik.OptIK(rbt_s, component_name='arm', obstacle_list=[])
+# ik_s = opt_ik.OptIK(rbt_s, component_name='arm', obs_list=[])
 # base.run()
 for cutter in mcn_s.cutters['0.75']:
     tgt_pos = cutter.pos

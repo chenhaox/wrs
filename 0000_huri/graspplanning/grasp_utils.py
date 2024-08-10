@@ -13,7 +13,7 @@ def ishndobjcollided(hndfa, jawwidth, homomat, objcm):
     """
 
     :param homomat:
-    :param obstaclecmlist:
+    :param obs_list:
     :return:
 
     author: ruishuang, revised by weiwei

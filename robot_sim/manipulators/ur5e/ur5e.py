@@ -110,15 +110,20 @@ if __name__ == '__main__':
     gm.gen_frame().attach_to(base)
     manipulator_instance = UR5E(enable_cc=True)
     manipulator_meshmodel = manipulator_instance.gen_meshmodel()
-    manipulator_meshmodel.attach_to(base)
-    manipulator_meshmodel.show_cdprimit()
-    manipulator_instance.gen_stickmodel(toggle_jntscs=True).attach_to(base)
-    tic = time.time()
-    print(manipulator_instance.is_collided())
-    toc = time.time()
-    print(toc - tic)
+
+    joint_angles = [-3.1, -1.6, 1.6, -1.6, -1.6, 0.]  # in radians
+    manipulator_instance.fk(joint_angles)
+    print("the end effector pose is:", manipulator_instance.get_gl_tcp())
+
+    # manipulator_meshmodel.attach_to(base)
+    # manipulator_meshmodel.show_cdprimit()
+    # manipulator_instance.gen_stickmodel(toggle_jntscs=True).attach_to(base)
+    # tic = time.time()
+    # print(manipulator_instance.is_collided())
+    # toc = time.time()
+    # print(toc - tic)
 
     # base = wd.World(cam_pos=[1, 1, 1], lookat_pos=[0,0,0])
     # gm.GeometricModel("./meshes/base.dae").attach_to(base)
     # gm.gen_frame().attach_to(base)
-    base.run()
+    # base.run()

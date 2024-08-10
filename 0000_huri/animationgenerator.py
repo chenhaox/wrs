@@ -109,7 +109,7 @@ def animationgen(rhx, numikmsmp, jawwidthmsmp, objmsmp, othersmsmp, sg_doestimat
                         else:
                             rhx.opengripperx(armname="rgt")
                     if not math.isclose(lftjawwidth, jawwidthmsmp[exeseccntr-1][0][1]):
-                        if lftjawwidth < rhx.lfthndfa.jawwidthopen:
+                        if lftjawwidth < rhx.lft_hnd.jawwidthopen:
                             rhx.closegripperx(armname="lft")
                         else:
                             rhx.opengripperx(armname="lft")
@@ -244,7 +244,7 @@ def animationgen_cont(rhx, numikmsmp, jawwidthmsmp, objmsmp, othersmsmp, sg_does
                     else:
                         rhx.opengripperx(armname="rgt")
                 if not math.isclose(lftjawwidth, jawwidthmsmp[exeseccntr-1][0][1]):
-                    if lftjawwidth < rhx.lfthndfa.jawwidthopen:
+                    if lftjawwidth < rhx.lft_hnd.jawwidthopen:
                         rhx.closegripperx(armname="lft")
                     else:
                         rhx.opengripperx(armname="lft")

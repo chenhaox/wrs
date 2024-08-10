@@ -145,7 +145,7 @@ if __name__ == '__main__':
                 #                                                         tgt_pos=tip_pos,
                 #                                                         cone_axis=-tip_rotmat[:3, 2],
                 #                                                         rotation_interval=np.radians(15),
-                #                                                         obstacle_list=[frame_bottom],
+                #                                                         obs_list=[frame_bottom],
                 #                                                         seed_jnt_values=np.zeros(6))
                 # # gm.gen_frame(pos=tip_pos, thickness=.001).attach_to(base)
                 # rbt_s.fk(component_name=component_name, jnt_values=new_joint_values)

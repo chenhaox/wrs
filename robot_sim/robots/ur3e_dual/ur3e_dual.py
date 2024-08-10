@@ -1,5 +1,7 @@
 import os
 import math
+import time
+
 import numpy as np
 import basis.robot_math as rm
 import modeling.model_collection as mc
@@ -9,6 +11,15 @@ import robot_sim.manipulators.ur3e.ur3e as ur
 import robot_sim.end_effectors.gripper.robotiqhe.robotiqhe as rtq
 from panda3d.core import CollisionNode, CollisionBox, Point3
 import robot_sim.robots.robot_interface as ri
+
+try:
+    from ur_ikfast import URKinematics
+
+    print("IKFast module loaded successfully")
+    IS_IKFAST_LOADED = True
+except:
+    IS_IKFAST_LOADED = False
+    print("IKFast module not loaded")
 
 
 class UR3EDual(ri.RobotInterface):
@@ -90,6 +101,29 @@ class UR3EDual(ri.RobotInterface):
         self.hnd_dict['lft_hnd'] = self.lft_hnd
         self.hnd_dict['rgt_arm'] = self.rgt_hnd
         self.hnd_dict['lft_arm'] = self.lft_hnd
+
+        if IS_IKFAST_LOADED:
+            self.b2w_homomat_dict = {}
+            self.tcp2ee_homomat_dict = {}
+            self._ur3e_arm = URKinematics('ur3e')
+            self.b2w_homomat_dict['rgt_arm'] = np.linalg.inv(rm.homomat_from_posrot(self.rgt_body.jnts[-1]['gl_posq'],
+                                                                                    self.rgt_body.jnts[-1][
+                                                                                        'gl_rotmatq'], ))
+            self.b2w_homomat_dict['lft_arm'] = np.linalg.inv(rm.homomat_from_posrot(self.lft_body.jnts[-1]['gl_posq'],
+                                                                                    self.lft_body.jnts[-1][
+                                                                                        'gl_rotmatq'], ))
+            self.tcp2ee_homomat_dict['rgt_arm'] = np.linalg.inv(
+                rm.homomat_from_posrot(self.manipulator_dict['rgt_arm'].tcp_loc_pos,
+                                       self.manipulator_dict['rgt_arm'].tcp_loc_rotmat))
+            self.tcp2ee_homomat_dict['lft_arm'] = np.linalg.inv(
+                rm.homomat_from_posrot(self.manipulator_dict['lft_arm'].tcp_loc_pos,
+                                       self.manipulator_dict['lft_arm'].tcp_loc_rotmat))
+            self.is_ikfast = True
+        else:
+            self._ur3e_arm = None
+            self.b2w_homomat_dict = None
+            self.tcp2ee_homomat_dict = None
+            self.is_ikfast = False
 
     @staticmethod
     def _base_combined_cdnp(name, radius):
@@ -267,6 +301,37 @@ class UR3EDual(ri.RobotInterface):
         else:
             raise ValueError("The given component name is not available!")
 
+    def ik(self,
+           component_name: str = "arm",
+           tgt_pos=np.zeros(3),
+           tgt_rotmat=np.eye(3),
+           seed_jnt_values=None,
+           max_niter=200,
+           tcp_jnt_id=None,
+           tcp_loc_pos=None,
+           tcp_loc_rotmat=None,
+           local_minima: str = "end",
+           all_sol=False,
+           toggle_debug=False):
+        if not IS_IKFAST_LOADED:
+            return self.manipulator_dict[component_name].ik(tgt_pos,
+                                                            tgt_rotmat,
+                                                            seed_jnt_values=seed_jnt_values,
+                                                            max_niter=max_niter,
+                                                            tcp_jnt_id=tcp_jnt_id,
+                                                            tcp_loc_pos=tcp_loc_pos,
+                                                            tcp_loc_rotmat=tcp_loc_rotmat,
+                                                            local_minima=local_minima,
+                                                            toggle_debug=toggle_debug)
+        else:
+
+            seed_jnt_values = seed_jnt_values if seed_jnt_values is not None else np.zeros(6)
+            w2tcp = rm.homomat_from_posrot(tgt_pos, tgt_rotmat)
+            b2ee = self.b2w_homomat_dict[component_name].dot(w2tcp.dot(self.tcp2ee_homomat_dict[component_name]))
+            return self._ur3e_arm.inverse(b2ee[:3, :],
+                                          all_solutions=all_sol,
+                                          q_guess=seed_jnt_values)
+
     def rand_conf(self, component_name):
         """
         override robot_interface.rand_conf
@@ -363,6 +428,50 @@ class UR3EDual(ri.RobotInterface):
             objcm.copy().attach_to(mm_collection)
         return mm_collection
 
+    def gen_env_meshmodel(self, toggle_jntscs=False, rgba=None, name='ur3e_dual_env_meshmodel'):
+        mm_collection = mc.ModelCollection(name=name)
+        self.lft_body.gen_meshmodel(tcp_loc_pos=None,
+                                    tcp_loc_rotmat=None,
+                                    toggle_tcpcs=False,
+                                    toggle_jntscs=toggle_jntscs,
+                                    rgba=rgba).attach_to(mm_collection)
+        return mm_collection
+
+    def gen_arm_meshmodel(self,
+                          component_name,
+                          tcp_jnt_id=None,
+                          tcp_loc_pos=None,
+                          tcp_loc_rotmat=None,
+                          toggle_tcpcs=False,
+                          toggle_jntscs=False,
+                          rgba=None,
+                          name='ur3e_dual_meshmodel'):
+        mm_collection = mc.ModelCollection(name=name)
+        assert component_name in self.manipulator_dict, 'Error: component name is not recognized'
+        arm = self.manipulator_dict[component_name]
+        hnd = self.hnd_dict[component_name]
+        if component_name == 'lft_arm':
+            oih_infos = self.lft_oih_infos
+        elif component_name == 'rgt_arm':
+            oih_infos = self.rgt_oih_infos
+        else:
+            raise ValueError('Error: component name is not recognized')
+        arm.gen_meshmodel(tcp_jnt_id=tcp_jnt_id,
+                          tcp_loc_pos=tcp_loc_pos,
+                          tcp_loc_rotmat=tcp_loc_rotmat,
+                          toggle_tcpcs=toggle_tcpcs,
+                          toggle_jntscs=toggle_jntscs,
+                          rgba=rgba).attach_to(mm_collection)
+        hnd.gen_meshmodel(toggle_tcpcs=False,
+                          toggle_jntscs=toggle_jntscs,
+                          rgba=rgba).attach_to(mm_collection)
+        for obj_info in oih_infos:
+            objcm = obj_info['collision_model']
+            objcm.set_pos(obj_info['gl_pos'])
+            objcm.set_rotmat(obj_info['gl_rotmat'])
+            objcm.copy().attach_to(mm_collection)
+        return mm_collection
+
 
 if __name__ == '__main__':
     import visualization.panda.world as wd
@@ -374,6 +483,38 @@ if __name__ == '__main__':
     # u3ed.fk(.85)
     u3ed_meshmodel = u3ed.gen_meshmodel(toggle_tcpcs=True)
     u3ed_meshmodel.attach_to(base)
+    ur3e = ur.UR3E()
+    ur3e.fk(u3ed.get_jnt_values("lft_arm"))
+    ur3e.gen_meshmodel().attach_to(base)
+
+    tgt_pos, tgt_rotmat = np.array([1.04097236, 0.33367596, 1.04838618]), np.array(
+        [[-8.36449319e-17, -8.66025404e-01, 5.00000000e-01],
+         [-8.66025404e-01, -2.50000000e-01, -4.33012702e-01],
+         [5.00000000e-01, -4.33012702e-01, -7.50000000e-01]])
+
+    component_name = 'lft_arm'
+    w2tcp = rm.homomat_from_posrot(tgt_pos, tgt_rotmat)
+    ee2tcp = rm.homomat_from_posrot(u3ed.manipulator_dict[component_name].tcp_loc_pos,
+                                    u3ed.manipulator_dict[component_name].tcp_loc_rotmat)
+    # b2w_homomat = u3ed.b2w_homomat_dict[component_name]
+    # w2ee = w2tcp.dot(np.linalg.inv(ee2tcp))
+    # b2ee = b2w_homomat.dot(w2ee)
+    # print("ur3e", ur3e.get_gl_tcp())
+    # print("b2ee", b2ee[:3, 3], b2ee[:3, :3])
+    # print(u3ed.get_gl_tcp("lft_arm"))
+    pos, rot = np.array([1.04097236 - .01, 0.33367596 - .01, 1.04838618 - .01]), np.array(
+        [[-8.36449319e-17, -8.66025404e-01, 5.00000000e-01],
+         [-8.66025404e-01, -2.50000000e-01, -4.33012702e-01],
+         [5.00000000e-01, -4.33012702e-01, -7.50000000e-01]])
+    a = time.time()
+    j = u3ed.ik("lft_arm", pos, rot, all_sol=True)
+    b = time.time()
+    print("time:", (b - a) * 1000)
+    if j is not None:
+        for j_sgl in j:
+            print("jnt_values:", j_sgl)
+            u3ed.fk("lft_arm", np.asarray(j_sgl))
+            u3ed.gen_meshmodel(toggle_tcpcs=True).attach_to(base)
     # u3ed_meshmodel.show_cdprimit()
     # u3ed.gen_stickmodel().attach_to(base)
     base.run()

@@ -8,22 +8,39 @@ import matplotlib.pyplot as plt
 from operator import itemgetter
 
 
-class RRT(object):
+def _decorator_keep_jnt_values(foo):
+    """
+    decorator function for save and restore robot_s's jnt values
+    :return:
+    author: weiwei
+    date: 20220404
+    """
 
-    @staticmethod
-    def _decorator_keep_jnt_values(foo):
-        """
-        decorator function for save and restore robot_s's jnt values
-        :return:
-        author: weiwei
-        date: 20220404
-        """
-        def wrapper(self, component_name, *args, **kwargs):
-            jnt_values_bk = self.robot_s.get_jnt_values(component_name)
-            result = foo(self, component_name, *args, **kwargs)
-            self.robot_s.fk(component_name=component_name, jnt_values=jnt_values_bk)
-            return result
-        return wrapper
+    def wrapper(self, component_name, *args, **kwargs):
+        jnt_values_bk = self.robot_s.get_jnt_values(component_name)
+        result = foo(self, component_name, *args, **kwargs)
+        self.robot_s.fk(component_name=component_name, jnt_values=jnt_values_bk)
+        return result
+
+    return wrapper
+
+def _decorator_keep_jnt_values2(foo):
+    """
+    decorator function for save and restore robot_s's jnt values
+    :return:
+    author: weiwei
+    date: 20220404
+    """
+
+    def wrapper(self, *args, **kwargs):
+        jnt_values_bk = self.robot_s.get_jnt_values()
+        result = foo(self, *args, **kwargs)
+        self.robot_s.fk(jnt_values=jnt_values_bk)
+        return result
+
+    return wrapper
+
+class RRT(object):
 
     def __init__(self, robot_s):
         self.robot_s = robot_s
@@ -49,7 +66,7 @@ class RRT(object):
         date: 20220326
         """
         # self.robot_s.fk(component_name=component_name, jnt_values=conf)
-        # return self.robot_s.is_collided(obstacle_list=obstacle_list, otherrobot_list=otherrobot_list)
+        # return self.robot_s.is_collided(obs_list=obs_list, otherrobot_list=otherrobot_list)
         if self.robot_s.is_jnt_values_in_ranges(component_name=component_name, jnt_values=conf):
             self.robot_s.fk(component_name=component_name, jnt_values=conf)
             return self.robot_s.is_collided(obstacle_list=obstacle_list, otherrobot_list=otherrobot_list)
@@ -74,7 +91,7 @@ class RRT(object):
         """
         nodes_dict = dict(roadmap.nodes(data='conf'))
         nodes_key_list = list(nodes_dict.keys())
-        nodes_value_list = list(nodes_dict.values()) # attention, correspondence is not guanranteed in python
+        nodes_value_list = list(nodes_dict.values())  # attention, correspondence is not guanranteed in python
         # use the following alternative if correspondence is bad (a bit slower), 20210523, weiwei
         # # nodes_value_list = list(nodes_dict.values())
         # nodes_value_list = itemgetter(*nodes_key_list)(nodes_dict)
@@ -98,11 +115,11 @@ class RRT(object):
         # switch to the following code for ful extensions
         if not exact_end:
             nval = math.ceil(len / ext_dist)
-            nval = 1 if nval == 0  else nval # at least include itself
+            nval = 1 if nval == 0 else nval  # at least include itself
             conf_array = np.linspace(conf1, conf1 + nval * ext_dist * vec, nval)
         else:
             nval = math.floor(len / ext_dist)
-            nval = 1 if nval == 0  else nval # at least include itself
+            nval = 1 if nval == 0 else nval  # at least include itself
             conf_array = np.linspace(conf1, conf1 + nval * ext_dist * vec, nval)
             conf_array = np.vstack((conf_array, conf2))
         return list(conf_array)
@@ -179,14 +196,14 @@ class RRT(object):
             # 20210523, it seems we do not need to check line length
             # if (len(shortcut) <= (j - i)) and all(not self._is_collided(component_name=component_name,
             #                                                            conf=conf,
-            #                                                            obstacle_list=obstacle_list,
+            #                                                            obs_list=obs_list,
             #                                                            otherrobot_list=otherrobot_list)
             #                                      for conf in shortcut):
             if all(not self._is_collided(component_name=component_name,
                                          conf=conf,
                                          obstacle_list=obstacle_list,
                                          otherrobot_list=otherrobot_list)
-                                                 for conf in shortcut):
+                   for conf in shortcut):
                 smoothed_path = smoothed_path[:i] + shortcut + smoothed_path[j + 1:]
             if animation:
                 self.draw_wspace([self.roadmap], self.start_conf, self.goal_conf,
@@ -312,7 +329,6 @@ class RRT(object):
         # plt.waitforbuttonpress()
 
 
-
 class RRT_v2(object):
     """
     this version does not involve a component name;
@@ -320,21 +336,6 @@ class RRT_v2(object):
     author: weiwei
     date: 20230807
     """
-
-    @staticmethod
-    def _decorator_keep_jnt_values(foo):
-        """
-        decorator function for save and restore robot_s's jnt values
-        :return:
-        author: weiwei
-        date: 20220404
-        """
-        def wrapper(self, *args, **kwargs):
-            jnt_values_bk = self.robot_s.get_jnt_values()
-            result = foo(self, *args, **kwargs)
-            self.robot_s.fk(jnt_values=jnt_values_bk)
-            return result
-        return wrapper
 
     def __init__(self, robot_s):
         self.robot_s = robot_s
@@ -357,7 +358,7 @@ class RRT_v2(object):
         author: weiwei
         date: 20220326
         """
-        if self.robot_s.is_jnt_values_in_ranges( jnt_values=conf):
+        if self.robot_s.is_jnt_values_in_ranges(jnt_values=conf):
             self.robot_s.fk(jnt_values=conf)
             return self.robot_s.is_collided(obstacle_list=obstacle_list, otherrobot_list=otherrobot_list)
         else:
@@ -381,7 +382,7 @@ class RRT_v2(object):
         """
         nodes_dict = dict(roadmap.nodes(data='conf'))
         nodes_key_list = list(nodes_dict.keys())
-        nodes_value_list = list(nodes_dict.values()) # attention, correspondence is not guanranteed in python
+        nodes_value_list = list(nodes_dict.values())  # attention, correspondence is not guanranteed in python
         # use the following alternative if correspondence is bad (a bit slower), 20210523, weiwei
         # # nodes_value_list = list(nodes_dict.values())
         # nodes_value_list = itemgetter(*nodes_key_list)(nodes_dict)
@@ -405,11 +406,11 @@ class RRT_v2(object):
         # switch to the following code for ful extensions
         if not exact_end:
             nval = math.ceil(len / ext_dist)
-            nval = 1 if nval == 0  else nval # at least include itself
+            nval = 1 if nval == 0 else nval  # at least include itself
             conf_array = np.linspace(conf1, conf1 + nval * ext_dist * vec, nval)
         else:
             nval = math.floor(len / ext_dist)
-            nval = 1 if nval == 0  else nval # at least include itself
+            nval = 1 if nval == 0 else nval  # at least include itself
             conf_array = np.linspace(conf1, conf1 + nval * ext_dist * vec, nval)
             conf_array = np.vstack((conf_array, conf2))
         return list(conf_array)
@@ -484,13 +485,13 @@ class RRT_v2(object):
             # 20210523, it seems we do not need to check line length
             # if (len(shortcut) <= (j - i)) and all(not self._is_collided(component_name=component_name,
             #                                                            conf=conf,
-            #                                                            obstacle_list=obstacle_list,
+            #                                                            obs_list=obs_list,
             #                                                            otherrobot_list=otherrobot_list)
             #                                      for conf in shortcut):
             if all(not self._is_collided(conf=conf,
                                          obstacle_list=obstacle_list,
                                          otherrobot_list=otherrobot_list)
-                                                 for conf in shortcut):
+                   for conf in shortcut):
                 smoothed_path = smoothed_path[:i] + shortcut + smoothed_path[j + 1:]
             if animation:
                 self.draw_wspace([self.roadmap], self.start_conf, self.goal_conf,
