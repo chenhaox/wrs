@@ -82,7 +82,7 @@ class RobotiqHE(gp.GripperInterface):
         self.rotmat = rotmat
         if jawwidth is not None:
             side_jawwidth = (self.jaw_range[1] - jawwidth) / 2.0
-            if 0 <= side_jawwidth <= self.jaw_range[1]/2.0:
+            if 0 <= side_jawwidth <= self.jaw_range[1] / 2.0:
                 self.lft.jnts[1]['motion_val'] = side_jawwidth;
                 self.rgt.jnts[1]['motion_val'] = self.lft.jnts[1]['motion_val']
             else:
@@ -110,6 +110,9 @@ class RobotiqHE(gp.GripperInterface):
         if jaw_width > self.jaw_range[1]:
             raise ValueError("The jawwidth parameter is out of range!")
         self.fk(motion_val=(self.jaw_range[1] - jaw_width) / 2.0)
+
+    def get_jaw_width(self):
+        return self.lft.jnts[1]['motion_val'] * 2
 
     def gen_stickmodel(self,
                        tcp_jntid=None,

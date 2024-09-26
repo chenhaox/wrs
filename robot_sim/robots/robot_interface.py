@@ -1,4 +1,6 @@
 import copy
+from typing import Optional
+
 import numpy as np
 import robot_sim._kinematics.collision_checker as cc
 
@@ -16,6 +18,7 @@ class RobotInterface(object):
         self.manipulator_dict = {}
         self.ft_sensor_dict = {}
         self.hnd_dict = {}
+        self.hnd_raw_dict = {}
 
     def change_name(self, name):
         self.name = name
@@ -138,6 +141,38 @@ class RobotInterface(object):
         collision_info = self.cc.is_collided(obstacle_list=obstacle_list,
                                              otherrobot_list=otherrobot_list,
                                              toggle_contact_points=toggle_contact_points)
+        return collision_info
+
+    def is_hnd_collided(self,
+                        hnd_name: str,
+                        hnd_homomat: Optional[np.ndarray] = None,
+                        hnd_jawwidth: Optional[float] = None,
+                        obstacle_list=None,
+                        otherrobot_list=None,
+                        toggle_contact_points=False):
+        """
+        Interface for "is cdprimit collided", must be implemented in child class
+        :param obstacle_list:
+        :param otherrobot_list:
+        :param toggle_contact_points: debug
+        :return: True if the hand is collided with the obstacles
+        """
+        if obstacle_list is None:
+            obstacle_list = []
+        if otherrobot_list is None:
+            otherrobot_list = []
+        if hnd_name not in self.hnd_dict:
+            raise ValueError("The hand name is not in the hand dictionary!")
+        hnd = self.hnd_raw_dict[hnd_name].copy()
+        if hnd_homomat is not None and hnd_jawwidth is not None:
+            hnd.grip_at_with_jcpose(hnd_homomat[:3, 3], hnd_homomat[:3, :3], hnd_jawwidth)
+            # hnd.gen_meshmodel(toggle_tcpcs=False, toggle_jntscs=False).attach_to(base)
+            # hnd.show_cdprimit()
+        collision_info = hnd.cc.is_collided(obstacle_list=obstacle_list,
+                                         otherrobot_list=otherrobot_list,
+                                         toggle_contact_points=toggle_contact_points)
+        # print(f"The collision result is {collision_info}")
+        # base.run()
         return collision_info
 
     def show_cdprimit(self):

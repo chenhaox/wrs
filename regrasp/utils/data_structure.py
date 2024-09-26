@@ -16,4 +16,6 @@ HandoverData = namedtuple('HandoverData', ['obj_name',
                                            'ik_fp_fid_gid_rgt',
                                            'ik_fp_fid_gid_lft',
                                            'ik_jnts_fp_gid_rgt',
-                                           'ik_jnts_fp_gid_lft', ])
+                                           'ik_jnts_fp_gid_lft',
+                                           'manipulability_fp_gid_rgt',
+                                           'manipulability_fp_gid_lft',])

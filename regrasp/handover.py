@@ -131,6 +131,8 @@ class Handover(object):
         self.ik_fp_fid_gid_lft = {}
         self.ik_jnts_fp_gid_rgt = {}
         self.ik_jnts_fp_gid_lft = {}
+        self.manipulability_fp_gid_rgt = {}
+        self.manipulability_fp_gid_lft = {}
 
     def _gen_fp_list(self, pos_list: list, rotmat=None, toggle_debug=False) -> list:
         assert isinstance(pos_list, list), "pos_list must a set of positions indicate the handover positions"
@@ -254,7 +256,9 @@ class Handover(object):
                         self.ik_fp_fid_gid_rgt,
                         self.ik_fp_fid_gid_lft,
                         self.ik_jnts_fp_gid_rgt,
-                        self.ik_jnts_fp_gid_lft],
+                        self.ik_jnts_fp_gid_lft,
+                        self.manipulability_fp_gid_rgt,
+                        self.manipulability_fp_gid_lft,],
                        self.save_dir.joinpath("data_handover_hndovrinfo.pickle"), reminder=False)
 
     def genhvgplist(self, hvgplist):
@@ -286,7 +290,9 @@ class Handover(object):
                         self.ik_fp_fid_gid_rgt,
                         self.ik_fp_fid_gid_lft,
                         self.ik_jnts_fp_gid_rgt,
-                        self.ik_jnts_fp_gid_lft],
+                        self.ik_jnts_fp_gid_lft,
+                        self.manipulability_fp_gid_rgt,
+                        self.manipulability_fp_gid_lft,],
                        self.save_dir.joinpath("data_handover_hndovrinfo.pickle"), reminder=False)
 
     def gethandover(self):
@@ -332,7 +338,7 @@ class Handover(object):
                                        tgt_rotmat=fp_grasp_center_rotmat,
                                        all_sol=True)
                 if msc_list is not None:
-                    msc_msc_handa_ik_sols = []
+                    msc_msc_approach_ik_sols = []
                     mpa_mpa_approach = []
                     for msc in msc_list:
                         self.rbt.fk(component_name=armname, jnt_values=msc)
@@ -341,26 +347,26 @@ class Handover(object):
                             continue
                         manipulability = self.rbt.manipulability(component_name=armname)
                         fp_grasp_center_apporach = fp_grasp_center + approach_direction * self.ret_dis
-                        msc_handa = self.rbt.ik(component_name=armname,
+                        msc_approach = self.rbt.ik(component_name=armname,
                                                 tgt_pos=fp_grasp_center_apporach,
                                                 tgt_rotmat=fp_grasp_center_rotmat,
                                                 seed_jnt_values=msc, )
-                        if msc_handa is not None:
-                            self.rbt.fk(component_name=armname, jnt_values=msc_handa)
+                        if msc_approach is not None:
+                            self.rbt.fk(component_name=armname, jnt_values=msc_approach)
                             is_collided = self.rbt.is_collided()
                             if is_collided:
                                 continue
-                            manipulability_handa = self.rbt.manipulability(component_name=armname)
+                            manipulability_approach = self.rbt.manipulability(component_name=armname)
                             if posid not in self.ik_fp_fid_gid_rgt:
                                 self.ik_fp_fid_gid_rgt[posid] = []
                             if i not in self.ik_fp_fid_gid_rgt[posid]:
                                 self.ik_fp_fid_gid_rgt[posid].append(i)
-                            msc_msc_handa_ik_sols.append([msc, msc_handa])
-                            mpa_mpa_approach.append([manipulability,  manipulability_handa])
+                            msc_msc_approach_ik_sols.append([msc, msc_approach])
+                            mpa_mpa_approach.append([manipulability,  manipulability_approach])
                     if posid not in self.ik_jnts_fp_gid_rgt:
                         self.ik_jnts_fp_gid_rgt[posid] = {}
                         self.manipulability_fp_gid_rgt[posid] = {}
-                    self.ik_jnts_fp_gid_rgt[posid][i] = msc_msc_handa_ik_sols
+                    self.ik_jnts_fp_gid_rgt[posid][i] = msc_msc_approach_ik_sols
                     self.manipulability_fp_gid_rgt[posid][i] = mpa_mpa_approach
 
         ### left hand
@@ -378,7 +384,7 @@ class Handover(object):
                                        tgt_rotmat=fp_grasp_center_rotmat,
                                        all_sol=True)
                 if msc_list is not None:
-                    msc_msc_handa_ik_sols = []
+                    msc_msc_approach_ik_sols = []
                     mpa_mpa_approach = []
                     for msc in msc_list:
                         self.rbt.fk(component_name=armname, jnt_values=msc)
@@ -387,26 +393,26 @@ class Handover(object):
                             continue
                         manipulability = self.rbt.manipulability(component_name=armname)
                         fp_grasp_center_apporach = fp_grasp_center + approach_direction * self.ret_dis
-                        msc_handa = self.rbt.ik(component_name=armname,
+                        msc_approach = self.rbt.ik(component_name=armname,
                                                 tgt_pos=fp_grasp_center_apporach,
                                                 tgt_rotmat=fp_grasp_center_rotmat,
                                                 seed_jnt_values=msc, )
-                        if msc_handa is not None:
-                            self.rbt.fk(component_name=armname, jnt_values=msc_handa)
+                        if msc_approach is not None:
+                            self.rbt.fk(component_name=armname, jnt_values=msc_approach)
                             is_collided = self.rbt.is_collided()
                             if is_collided:
                                 continue
-                            manipulability_handa = self.rbt.manipulability(component_name=armname)
+                            manipulability_approach = self.rbt.manipulability(component_name=armname)
                             if posid not in self.ik_fp_fid_gid_lft:
                                 self.ik_fp_fid_gid_lft[posid] = []
                             if i not in self.ik_fp_fid_gid_lft[posid]:
                                 self.ik_fp_fid_gid_lft[posid].append(i)
-                            msc_msc_handa_ik_sols.append([msc, msc_handa])
-                            mpa_mpa_approach.append([manipulability,  manipulability_handa])
+                            msc_msc_approach_ik_sols.append([msc, msc_approach])
+                            mpa_mpa_approach.append([manipulability,  manipulability_approach])
                     if posid not in self.ik_jnts_fp_gid_lft:
                         self.ik_jnts_fp_gid_lft[posid] = {}
                         self.manipulability_fp_gid_lft[posid] = {}
-                    self.ik_jnts_fp_gid_lft[posid][i] = msc_msc_handa_ik_sols
+                    self.ik_jnts_fp_gid_lft[posid][i] = msc_msc_approach_ik_sols
                     self.manipulability_fp_gid_lft[posid][i] = mpa_mpa_approach
 
         self.grasp_pairs_fp = {}

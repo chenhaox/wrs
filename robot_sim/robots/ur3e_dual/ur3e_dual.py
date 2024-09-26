@@ -102,20 +102,28 @@ class UR3EDual(ri.RobotInterface):
         self.hnd_dict['rgt_arm'] = self.rgt_hnd
         self.hnd_dict['lft_arm'] = self.lft_hnd
 
+        self.hnd_raw_dict['rgt_arm'] = self.hnd_raw_dict['rgt_hnd'] = rtq.RobotiqHE(
+            coupling_offset_pos=np.array([0.0, 0.0, 0.0331]),
+            enable_cc=True)
+        self.hnd_raw_dict['lft_arm'] = self.hnd_raw_dict['lft_hnd'] = rtq.RobotiqHE(
+            coupling_offset_pos=np.array([0.0, 0.0, 0.0331]),
+            enable_cc=True)
+
         if IS_IKFAST_LOADED:
             self.b2w_homomat_dict = {}
             self.tcp2ee_homomat_dict = {}
             self._ur3e_arm = URKinematics('ur3e')
-            self.b2w_homomat_dict['rgt_arm'] = np.linalg.inv(rm.homomat_from_posrot(self.rgt_body.jnts[-1]['gl_posq'],
-                                                                                    self.rgt_body.jnts[-1][
-                                                                                        'gl_rotmatq'], ))
-            self.b2w_homomat_dict['lft_arm'] = np.linalg.inv(rm.homomat_from_posrot(self.lft_body.jnts[-1]['gl_posq'],
+            self.b2w_homomat_dict['rgt_arm'] = self.b2w_homomat_dict['rgt_hnd'] = np.linalg.inv(
+                rm.homomat_from_posrot(self.rgt_body.jnts[-1]['gl_posq'],
+                                       self.rgt_body.jnts[-1][
+                                           'gl_rotmatq'], ))
+            self.b2w_homomat_dict['lft_arm'] = self.b2w_homomat_dict['lft_hnd'] = np.linalg.inv(rm.homomat_from_posrot(self.lft_body.jnts[-1]['gl_posq'],
                                                                                     self.lft_body.jnts[-1][
                                                                                         'gl_rotmatq'], ))
-            self.tcp2ee_homomat_dict['rgt_arm'] = np.linalg.inv(
+            self.tcp2ee_homomat_dict['rgt_arm'] = self.tcp2ee_homomat_dict['rgt_hnd'] = np.linalg.inv(
                 rm.homomat_from_posrot(self.manipulator_dict['rgt_arm'].tcp_loc_pos,
                                        self.manipulator_dict['rgt_arm'].tcp_loc_rotmat))
-            self.tcp2ee_homomat_dict['lft_arm'] = np.linalg.inv(
+            self.tcp2ee_homomat_dict['lft_arm'] = self.tcp2ee_homomat_dict['lft_hnd'] = np.linalg.inv(
                 rm.homomat_from_posrot(self.manipulator_dict['lft_arm'].tcp_loc_pos,
                                        self.manipulator_dict['lft_arm'].tcp_loc_rotmat))
             self.is_ikfast = True
@@ -248,9 +256,9 @@ class UR3EDual(ri.RobotInterface):
         self.rgt_hnd.fix_to(pos=rgt_hnd_pos, rotmat=rgt_hnd_rotmat)
 
     def get_hnd_on_manipulator(self, manipulator_name):
-        if manipulator_name == 'rgt_arm':
+        if manipulator_name == 'rgt_arm' or manipulator_name == 'rgt_hnd':
             return self.rgt_hnd
-        elif manipulator_name == 'lft_arm':
+        elif manipulator_name == 'lft_arm' or manipulator_name == 'lft_hnd':
             return self.lft_hnd
         else:
             raise ValueError("The given jlc does not have a hand!")
@@ -267,9 +275,9 @@ class UR3EDual(ri.RobotInterface):
 
         def update_oih(component_name='rgt_arm'):
             # inline function for update objects in hand
-            if component_name == 'rgt_arm':
+            if component_name == 'rgt_arm' or component_name == 'rgt_hnd':
                 oih_info_list = self.rgt_oih_infos
-            elif component_name == 'lft_arm':
+            elif component_name == 'lft_arm' or component_name == 'lft_hnd':
                 oih_info_list = self.lft_oih_infos
             for obj_info in oih_info_list:
                 gl_pos, gl_rotmat = self.cvt_loc_tcp_to_gl(component_name, obj_info['rel_pos'], obj_info['rel_rotmat'])
@@ -286,7 +294,7 @@ class UR3EDual(ri.RobotInterface):
 
         super().fk(component_name, jnt_values)
         # examine length
-        if component_name == 'lft_arm' or component_name == 'rgt_arm':
+        if component_name in self.manipulator_dict.keys():
             if not isinstance(jnt_values, np.ndarray) or jnt_values.size != 6:
                 raise ValueError("An 1x6 npdarray must be specified to move a single arm!")
             return update_component(component_name, jnt_values)
@@ -346,6 +354,15 @@ class UR3EDual(ri.RobotInterface):
             return np.hstack((super().rand_conf('lft_arm'), super().rand_conf('rgt_arm')))
         else:
             raise NotImplementedError
+
+    def init_conf(self):
+        """
+        override robot_interface.init_conf
+        :param component_name:
+        :return:
+        """
+        for component_name in self.manipulator_dict.keys():
+            self.fk(component_name, self.manipulator_dict[component_name].homeconf)
 
     def gen_stickmodel(self,
                        tcp_jnt_id=None,

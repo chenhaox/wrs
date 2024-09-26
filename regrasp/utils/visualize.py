@@ -219,8 +219,9 @@ def visualize_handover(grasp_pairs_fp: List,
     gp_id_txt = DirectLabel(text="Grasping Pair ID: ", text_scale=0.1,
                             parent=base.a2dTopCenter, pos=(0, 0, -0.2), frameColor=(1, 1, 1, 1))
     note_txt = DirectLabel(text="Press 'Space' to Continue", text_scale=0.1,
-                            parent=base.a2dBottomCenter, pos=(0, 0, 0.1), frameColor=(1, 1, 1, 1))
+                           parent=base.a2dBottomCenter, pos=(0, 0, 0.1), frameColor=(1, 1, 1, 1))
     rbt.gen_env_meshmodel().attach_to(base)
+
     def _show_gripper(task):
         """
         Show the gripper in the base
@@ -262,3 +263,81 @@ def visualize_handover(grasp_pairs_fp: List,
         return task.again
 
     taskMgr.doMethodLater(0.1, _show_gripper, "show_gripper_pair")  # show the gripper in the base
+
+
+def visualize_traj_data(traj_data: 'RbtTrajData',
+                        obj: gm.GeometricModel,
+                        rbt: RobotInterface,
+                        base: Optional[wd.World] = None, ):
+    """
+    Visualize the key poses in the trajectory data
+    """
+    assert isinstance(rbt, RobotInterface), "Invalid robot!"
+    if base is None:
+        try:
+            hasattr(base, 'run')
+        except Exception as e:
+            raise Exception(f"Invalid base: {e}")
+
+    counter = [0, 0]
+
+    vis_node: List[Optional[gm.GeometricModel]] = [None, None]
+
+    fp_id_txt = DirectLabel(text="Key Pose ID: ", text_scale=0.1,
+                            parent=base.a2dTopCenter, pos=(0, 0, -0.1), frameColor=(1, 1, 1, 1))
+    gp_id_txt = DirectLabel(text="Grasping Pair ID: ", text_scale=0.1,
+                            parent=base.a2dTopCenter, pos=(0, 0, -0.2), frameColor=(1, 1, 1, 1))
+    note_txt = DirectLabel(text="Press 'Space' to Continue", text_scale=0.1,
+                           parent=base.a2dBottomCenter, pos=(0, 0, 0.1), frameColor=(1, 1, 1, 1))
+    rbt.gen_env_meshmodel().attach_to(base)
+
+    def _key_poses(task):
+        """
+        Show the gripper in the base
+        """
+        traj_data
+        if base.inputmgr.keymap['space']:  # press space to switch to the next grasp
+            base.inputmgr.keymap['space'] = False
+            if counter[0] >= len(traj_data):
+                counter[0] = 0
+            if vis_node[0] is not None:
+                vis_node[0].detach()  # detach the previous gripper
+            if vis_node[1] is not None:
+                vis_node[1].detach()  # detach the previous gripper
+            fp_id_txt["text"] = f"Key Pose ID: {counter[0] + 1} / {len(traj_data)}"
+            # gp_id_txt["text"] = f"Grasping Pair ID: {counter[1]} / {len(grasp_pairs_fp[counter[0]])}"
+            rgt_data, lft_data = traj_data[counter[0]]['rgt_arm'], traj_data[counter[0]]['lft_arm']
+
+            jnt_rgt_data = rgt_data.jnt_val
+            jnt_lft_data = lft_data.jnt_val
+            jawwidth_rgt_data = rgt_data.jawwidth
+            jawwidth_lft_data = lft_data.jawwidth
+            obj_homomat = traj_data[counter[0]].obj_homomat
+            mm_collection = mc.ModelCollection()
+            if isinstance(jnt_rgt_data, np.ndarray) and np.prod(jnt_rgt_data.shape) == rbt.manipulator_dict['rgt_arm'].ndof:
+                rbt.fk("rgt_arm", jnt_rgt_data)
+                rbt.jaw_to("rgt_hnd", jawwidth_rgt_data)
+                rbt.gen_arm_meshmodel("rgt_arm").attach_to(mm_collection)
+            else:
+                for jnt_rgt in jnt_rgt_data:
+                    rbt.fk("rgt_arm", jnt_rgt)
+                    rbt.jaw_to("rgt_hnd", jawwidth_rgt_data)
+                    rbt.gen_arm_meshmodel("rgt_arm").attach_to(mm_collection)
+            if isinstance(jnt_lft_data, np.ndarray) and np.prod(jnt_lft_data.shape) == rbt.manipulator_dict['lft_arm'].ndof:
+                rbt.fk("lft_arm", jnt_lft_data)
+                rbt.jaw_to("lft_hnd", jawwidth_lft_data)
+                rbt.gen_arm_meshmodel("lft_arm").attach_to(mm_collection)
+            else:
+                for jnt_lft in jnt_lft_data:
+                    rbt.fk("lft_arm", jnt_lft)
+                    rbt.jaw_to("lft_hnd", jawwidth_lft_data)
+                    rbt.gen_arm_meshmodel("lft_arm").attach_to(mm_collection)
+            vis_node[0] = mm_collection
+            vis_node[0].attach_to(base)
+            vis_node[1] = obj.copy()
+            vis_node[1].set_homomat(obj_homomat)
+            vis_node[1].attach_to(base)
+            counter[0] = counter[0] + 1
+        return task.again
+
+    taskMgr.doMethodLater(0.1, _key_poses, "show_key_poses")  # show the gripper in the base
