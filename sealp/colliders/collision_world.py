@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+import numpy as np
 import wrs.modeling.model_collection as mmc
 
 from .obstacle_manager import ObstacleManager
@@ -82,9 +83,9 @@ class CollisionWorld:
             if toggle_cdprim:
                 model.show_cdprimit()
             copy = model.copy()
-            rgba = copy.get_rgba()
+            rgba = copy.rgba
             if rgba is not None and len(rgba) >= 4:
-                copy.set_rgba([rgba[0], rgba[1], rgba[2], alpha])
+                copy.rgba = np.array([rgba[0], rgba[1], rgba[2], alpha])
             copy.attach_to(meshmodel)
 
         # User-defined obstacles
@@ -92,9 +93,9 @@ class CollisionWorld:
             if toggle_cdprim:
                 model.show_cdprimit()
             copy = model.copy()
-            rgba = copy.get_rgba()
+            rgba = copy.rgba
             if rgba is not None and len(rgba) >= 4:
-                copy.set_rgba([rgba[0], rgba[1], rgba[2], alpha])
+                copy.rgba = np.array([rgba[0], rgba[1], rgba[2], alpha])
             copy.attach_to(meshmodel)
 
         meshmodel.attach_to(base)

@@ -82,15 +82,15 @@ class StaticEnvironment:
 
             pos = cfg.get("pos")
             if pos is not None:
-                model.set_pos(np.asarray(pos, dtype=float))
+                model.pos = np.asarray(pos, dtype=float)
 
             rotmat = cfg.get("rotmat")
             if rotmat is not None:
-                model.set_rotmat(np.asarray(rotmat, dtype=float))
+                model.rotmat = np.asarray(rotmat, dtype=float)
 
             rgba = cfg.get("rgba")
             if rgba is not None:
-                model.set_rgba(rgba)
+                model.rgba = np.asarray(rgba, dtype=float)
 
             self._manager.add(name, model)
 

@@ -58,7 +58,7 @@ from sealp.editor.part_manager import PartManager
 
 # ── Layout constants ─────────────────────────────────────────
 RIGHT_W = 0.30          # half-width of right panel
-LEFT_W = 0.24           # half-width of left panel
+LEFT_W = 0.28           # half-width of left panel
 CONSOLE_H = 0.26        # height of console bar
 STATUS_H = 0.040        # height of status bar
 BTN_W = 0.17            # standard button width
@@ -90,7 +90,8 @@ class AssemblyEditor:
         self.transform = TransformHandler(on_mode_change=self._on_mode_change)
         self._selected_step_id: int | None = None
         self._current_file: str | None = sequence_file
-        self._grab_plane_z: float = 0.0  # Z height of grab plane
+        self._grab_plane_z: float = 0.0
+        self._grab_start_mouse: tuple | None = None
 
         # ── Build GUI (order: right, left, status, console) ──
         self._build_right_panel()
@@ -258,7 +259,7 @@ class AssemblyEditor:
     # ==============================================================
     def _build_left_panel(self):
         pw = LEFT_W
-        panel_h = 1.20
+        panel_h = 1.35
         self._left_frame = create_panel(
             self.world.a2dTopLeft, pw * 2, panel_h,
             (0, 0), bg=BG_MID,
@@ -266,73 +267,79 @@ class AssemblyEditor:
 
         y = -TOP_MARGIN * 2
         inner_w = pw * 2 - LEFT_MARGIN * 2
+        val_x = 0.14            # x-offset for property values
+        entry_x = 0.10          # x-offset for entry fields
+        entry_w = 0.18          # entry field width
+        row_h = TEXT_SIZE * 1.8  # vertical spacing between rows
 
         create_section_header(self._left_frame, "Properties",
                               (LEFT_MARGIN, y), width=inner_w)
-        y -= SECTION_SIZE * 1.5
+        y -= SECTION_SIZE * 1.8
 
-        # part name
+        # ── Part name (label on left, value on right) ────────
         create_label(self._left_frame, "Part:", (LEFT_MARGIN, y),
                      scale=SMALL_TEXT, color=TEXT_SECONDARY)
         self._prop_name = create_label(
-            self._left_frame, "(none)", (0.065, y), color=TEXT_PRIMARY)
-        y -= TEXT_SIZE * 1.5
+            self._left_frame, "(none)", (val_x, y), color=TEXT_PRIMARY)
+        y -= row_h
 
-        # model
+        # ── Model path ───────────────────────────────────────
         create_label(self._left_frame, "Model:", (LEFT_MARGIN, y),
                      scale=SMALL_TEXT, color=TEXT_SECONDARY)
         self._prop_model = create_label(
-            self._left_frame, "-", (0.075, y),
+            self._left_frame, "-", (val_x, y),
             scale=SMALL_TEXT * 0.85, color=TEXT_SECONDARY)
-        y -= TEXT_SIZE * 1.8
+        y -= row_h * 1.2
 
         # ── Position ─────────────────────────────────────────
         create_separator(self._left_frame, (LEFT_MARGIN, y), inner_w)
-        y -= TOP_MARGIN * 2
+        y -= TOP_MARGIN * 3
         create_section_header(self._left_frame, "Position",
-                              (LEFT_MARGIN, y), width=inner_w * 0.6,
+                              (LEFT_MARGIN, y), width=inner_w * 0.5,
                               color=ACCENT_BRIGHT)
-        y -= SECTION_SIZE * 1.1
+        y -= SECTION_SIZE * 1.3
 
         self._pos_entries = {}
         for ax, col in [("X", (0.95, 0.30, 0.30, 1)),
                         ("Y", (0.30, 0.85, 0.30, 1)),
                         ("Z", (0.30, 0.55, 0.95, 1))]:
-            create_label(self._left_frame, f"{ax}:", (LEFT_MARGIN, y),
+            create_label(self._left_frame, f"{ax}:", (LEFT_MARGIN + 0.01, y),
                          scale=SMALL_TEXT, color=col)
             self._pos_entries[ax] = create_entry(
-                self._left_frame, (0.05, y), width=0.14, initial="0.000")
-            y -= TEXT_SIZE * 1.4
-        y -= TOP_MARGIN
+                self._left_frame, (entry_x, y), width=entry_w,
+                initial="0.000")
+            y -= TEXT_SIZE * 1.6
+        y -= TOP_MARGIN * 2
 
         # ── Rotation ─────────────────────────────────────────
         create_section_header(self._left_frame, "Rotation (deg)",
-                              (LEFT_MARGIN, y), width=inner_w * 0.6,
+                              (LEFT_MARGIN, y), width=inner_w * 0.5,
                               color=ACCENT_BRIGHT)
-        y -= SECTION_SIZE * 1.1
+        y -= SECTION_SIZE * 1.3
 
         self._rot_entries = {}
         for ax, col in [("Rx", (0.95, 0.30, 0.30, 1)),
                         ("Ry", (0.30, 0.85, 0.30, 1)),
                         ("Rz", (0.30, 0.55, 0.95, 1))]:
-            create_label(self._left_frame, f"{ax}:", (LEFT_MARGIN, y),
+            create_label(self._left_frame, f"{ax}:", (LEFT_MARGIN + 0.01, y),
                          scale=SMALL_TEXT, color=col)
             self._rot_entries[ax] = create_entry(
-                self._left_frame, (0.05, y), width=0.14, initial="0.000")
-            y -= TEXT_SIZE * 1.4
-        y -= TOP_MARGIN
+                self._left_frame, (entry_x, y), width=entry_w,
+                initial="0.000")
+            y -= TEXT_SIZE * 1.6
+        y -= TOP_MARGIN * 2
 
-        # apply button
+        # ── Apply button ──────────────────────────────────────
         create_accent_button(self._left_frame, "Apply",
-                             (LEFT_MARGIN + 0.06, y),
-                             self._on_apply_properties, width=0.12)
-        y -= TEXT_SIZE * 2.2
+                             (LEFT_MARGIN + 0.08, y),
+                             self._on_apply_properties, width=0.16)
+        y -= TEXT_SIZE * 2.8
 
-        # mass
+        # ── Mass ──────────────────────────────────────────────
         create_label(self._left_frame, "Mass:", (LEFT_MARGIN, y),
                      scale=SMALL_TEXT, color=TEXT_SECONDARY)
         self._prop_mass = create_label(
-            self._left_frame, "0.0 kg", (0.08, y), color=TEXT_PRIMARY)
+            self._left_frame, "0.0 kg", (val_x, y), color=TEXT_PRIMARY)
 
     # ==============================================================
     # STATUS BAR — at the very bottom
@@ -406,7 +413,9 @@ class AssemblyEditor:
             # determine grab plane Z from the part's current height
             self._grab_plane_z = float(entry.cmodel.pos[2])
             world_hit = self._mouse_to_world_on_plane(self._grab_plane_z)
-            if world_hit is not None:
+            mouse_xy = self._get_mouse_xy()
+            if world_hit is not None and mouse_xy is not None:
+                self._grab_start_mouse = mouse_xy  # store for Z-axis mode
                 self.transform.start_grab(
                     entry.cmodel.pos.copy(),
                     entry.cmodel.rotmat.copy(),
@@ -442,9 +451,6 @@ class AssemblyEditor:
 
     def _key_axis_z(self):
         if self.transform.active:
-            # for Z grab: switch to vertical plane
-            if self.transform.mode == TransformMode.GRAB:
-                self._grab_plane_z = None  # signal to use vertical mode
             self.transform.constrain(AxisConstraint.Z)
             self.console.log_info("Axis constrained to Z")
 
@@ -480,23 +486,23 @@ class AssemblyEditor:
         if self.transform.active:
             sel = self.part_mgr.selected_id
             if self.transform.mode == TransformMode.GRAB:
-                # For Z-axis constraint, use mouse Y as a direct offset
                 if self.transform.axis == AxisConstraint.Z:
+                    # Z-axis grab: mouse Y screen delta → Z world offset
                     mouse_xy = self._get_mouse_xy()
-                    if mouse_xy and sel:
-                        # use vertical mouse movement for Z
-                        dy = mouse_xy[1] - (self.transform._start_mouse[1]
-                                            if self.transform._start_mouse
-                                            else mouse_xy[1])
-                        # create a synthetic world hit
-                        new_z = self.transform._origin_pos[2] + dy * 0.5
+                    if mouse_xy and sel and hasattr(self, '_grab_start_mouse'):
+                        dy = mouse_xy[1] - self._grab_start_mouse[1]
+                        # scale by camera distance for natural feel
+                        cam_dist = np.linalg.norm(
+                            np.array(self.world.cam.getPos(self.world.render))
+                            - self.transform._origin_pos)
+                        new_z = self.transform._origin_pos[2] + dy * cam_dist * 0.5
                         world_hit = self.transform._start_world_pos.copy()
                         world_hit[2] = new_z
                         pos, rotmat = self.transform.update_grab(world_hit)
                         self.part_mgr.update_part_pose(sel, pos, rotmat)
                         self._refresh_properties()
                 else:
-                    # Normal XY / X / Y grab via ray-plane intersection
+                    # XY / X / Y grab via ray-plane intersection
                     world_hit = self._mouse_to_world_on_plane(
                         self._grab_plane_z)
                     if world_hit is not None and sel:
