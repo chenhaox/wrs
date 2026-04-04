@@ -5,19 +5,6 @@
 
 
     <link name="arm_base">
-        <inertial>
-        <origin
-            xyz="-0.00979274765955341 1.82905827587138E-06 0.0410100126360189"
-            rpy="0 0 0" />
-        <mass value="10.162548567403693" />
-        <inertia
-            ixx="0.000226596924525071"
-            ixy="-7.33972270153965E-08"
-            ixz="2.13249977802622E-06"
-            iyy="0.000269444772561524"
-            iyz="8.15169009611054E-09"
-            izz="0.000222318258878636" />
-        </inertial>
         <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
@@ -236,12 +223,13 @@
         </collision>
     </link>
     <joint name="joint6" type="revolute">
-        <origin xyz="0 0.091 0.0014165" rpy="-1.5708 -1.5708 0" />
+        <origin xyz="0 0.091 0.0014165" rpy="1.5708 0.0 3.14159" />
         <parent link="link5" />
         <child link="link6" />
         <axis xyz="0 0 1" />
-        <limit lower="-3.14" upper="3.14" effort="100" velocity="3" />
+        <limit lower="-2.094" upper="2.094" effort="100" velocity="3" />
     </joint>
+
 
     <link name="link7">
         <inertial>

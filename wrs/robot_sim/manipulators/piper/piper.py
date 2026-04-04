@@ -75,6 +75,8 @@ import wrs.modeling.collision_model as mcm
 
 # Attempt to import the Trac IK solver.  If unavailable, numerical IK
 # provided by the joint linkage controller (JLC) will be used instead.
+
+
 try:
     from trac_ik import TracIK
 
@@ -107,7 +109,7 @@ class Piper(mi.ManipulatorInterface):
         current_file_dir = os.path.dirname(__file__)
 
         # define a uniform colour for all links
-        rgba = np.array([0.79216, 0.81961, 0.93333, 1])
+        rgba = np.array([0.6, 0.6, 0.6, 1.0])
 
         # anchor (arm_base)
         self.jlc.anchor.lnk_list[0].cmodel = mcm.CollisionModel(
@@ -128,7 +130,7 @@ class Piper(mi.ManipulatorInterface):
         self.jlc.jnts[0].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link1 in URDF has a rotation of +90° about Z for the collision mesh
         self.jlc.jnts[0].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, 1.5708)
-        self.jlc.jnts[0].lnk.cmodel.rgba = np.array([0.133, 0.165, 0.224, 1])
+        self.jlc.jnts[0].lnk.cmodel.rgba = np.array([0.3, 0.3, 0.3, 1.0])
 
         # --- Joint 2 (link1 -> link2) ---
         self.jlc.jnts[1].loc_pos = np.array([0.0, 0.0, 0.0])
@@ -141,7 +143,7 @@ class Piper(mi.ManipulatorInterface):
         self.jlc.jnts[1].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link2 has a small yaw offset of +0.1 rad for the collision mesh【338922380148493†L96-L100】
         self.jlc.jnts[1].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, 0.1)
-        self.jlc.jnts[1].lnk.cmodel.rgba = np.array([0.776,0.851,0.941, 1])
+        self.jlc.jnts[1].lnk.cmodel.rgba = np.array([0.3, 0.3, 0.3, 1.0])
 
         # --- Joint 3 (link2 -> link3) ---
         self.jlc.jnts[2].loc_pos = np.array([0.28358, 0.028726, 0.0])
@@ -154,7 +156,7 @@ class Piper(mi.ManipulatorInterface):
         self.jlc.jnts[2].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link3 has a yaw offset of −1.75 rad on the collision mesh【338922380148493†L134-L137】
         self.jlc.jnts[2].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, -1.75)
-        self.jlc.jnts[2].lnk.cmodel.rgba = np.array([0.329,0.459,0.737, 1])
+        self.jlc.jnts[2].lnk.cmodel.rgba = np.array([0.3, 0.3, 0.3, 1.0])
 
         # --- Joint 4 (link3 -> link4) ---
         self.jlc.jnts[3].loc_pos = np.array([-0.24221, 0.068514, 0.0])
@@ -166,8 +168,8 @@ class Piper(mi.ManipulatorInterface):
             os.path.join(current_file_dir, "meshes", "link4.STL"))
         self.jlc.jnts[3].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link4 has no additional rotation
-        self.jlc.jnts[3].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, 0.0)
-        self.jlc.jnts[3].lnk.cmodel.rgba = np.array([0.231,0.329,0.529, 1])
+        self.jlc.jnts[3].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, np.pi)
+        self.jlc.jnts[3].lnk.cmodel.rgba = np.array([0.3, 0.3, 0.3, 1.0])
 
         # --- Joint 5 (link4 -> link5) ---
         self.jlc.jnts[4].loc_pos = np.array([0.0, 0.0, 0.0])
@@ -180,37 +182,38 @@ class Piper(mi.ManipulatorInterface):
         self.jlc.jnts[4].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link5 collision mesh is rotated by −π about Z【338922380148493†L210-L213】
         self.jlc.jnts[4].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, -3.14)
-        self.jlc.jnts[4].lnk.cmodel.rgba = np.array([0.067,0.169,0.341, 1])
+        self.jlc.jnts[4].lnk.cmodel.rgba = np.array([0.3, 0.3, 0.3, 1.0])
 
         # --- Joint 6 (link5 -> link6) ---
         self.jlc.jnts[5].loc_pos = np.array([0.0, 0.091, 0.0014165])
-        # rotation: roll=−90°, pitch=−90°    
-        self.jlc.jnts[5].loc_rotmat = rm.rotmat_from_euler(-1.5708, -1.5708, 0.0)
+        # orig_rotmat = rm.rotmat_from_euler(-1.5708, -1.5708, 0.0)
+        corrected_rotmat_direct = rm.rotmat_from_euler(1.5708, 0.0, 3.14159)
+        self.jlc.jnts[5].loc_rotmat = corrected_rotmat_direct
         self.jlc.jnts[5].loc_motion_ax = np.array([0.0, 0.0, 1.0])
-        self.jlc.jnts[5].motion_range = np.array([-3.14, 3.14])
-        self.jlc.jnts[5].lnk.cmodel = mcm.CollisionModel(
-            os.path.join(current_file_dir, "meshes", "camera_v3.dae"))
+        self.jlc.jnts[5].motion_range = np.array([-2.094, 2.094])
+        # self.jlc.jnts[5].lnk.cmodel = mcm.CollisionModel(
+        #     os.path.join(current_file_dir, "meshes", "camera_v3.dae"))
         # In the URDF the camera (link6) mesh has an offset
-        self.jlc.jnts[5].lnk.loc_pos = np.array([-0.002, -0.008, 0.0])
-        self.jlc.jnts[5].lnk.loc_rotmat = rm.rotmat_from_euler(-1.57, 0.0, 0.0)
-        self.jlc.jnts[5].lnk.cmodel.rgba = np.array([0.031,0.090,0.196, 1])
+        # self.jlc.jnts[5].lnk.loc_pos = np.array([-0.002, -0.008, 0.0])
+        # self.jlc.jnts[5].lnk.loc_rotmat = rm.rotmat_from_euler(-1.57, 0.0, 0.0)
+        # self.jlc.jnts[5].lnk.cmodel.rgba = np.array([0.3, 0.3, 0.3, 1.0])
 
         # Finalise the joint linkage chain and set up IK solver
         self.jlc.finalize(ik_solver=ik_solver, identifier_str=name)
-
-        # Define the tool centre point (TCP) at the end of link6.  By
-        # default the TCP coincides with the end of link6 but it can be
-        # adjusted by changing loc_tcp_pos and loc_tcp_rotmat after
-        # instantiation.
         self.loc_tcp_pos = np.array([0.0, 0.0, 0.0])
         self.loc_tcp_rotmat = np.eye(3)
-
+        # z_rot_90 = rm.rotmat_from_euler(0.0, 0.0, -np.pi / 2)
+        #
+        # # 右乘操作 (A = A @ B) 实现绕局部坐标系旋转
+        # self.loc_tcp_rotmat = self.loc_tcp_rotmat @ z_rot_90
         # Configure the Trac IK solver when available
         if is_trac_ik:
             directory = os.path.abspath(os.path.dirname(__file__))
             urdf = os.path.join(directory, "piper_description_v100_camera.urdf")
             # base_link and link6 are defined in the URDF; use them for IK
-            self._ik_solver = TracIK("arm_base", "link6", urdf)
+            self._ik_solver = TracIK("arm_base", "link6", urdf,
+                                     timeout=0.002,
+                                     solver_type="Distance")
         else:
             self._ik_solver = None
 
@@ -230,9 +233,9 @@ class Piper(mi.ManipulatorInterface):
         l2 = self.cc.add_cce(self.jlc.jnts[2].lnk)
         l3 = self.cc.add_cce(self.jlc.jnts[3].lnk)
         l4 = self.cc.add_cce(self.jlc.jnts[4].lnk)
-        l5 = self.cc.add_cce(self.jlc.jnts[5].lnk)
-        from_list = [l3, l4, l5]
-        into_list = [lb, l0, l1, ]
+        # l5 = self.cc.add_cce(self.jlc.jnts[5].lnk)
+        from_list = [l3, l4]
+        into_list = [lb, l0, l1, l2]
         self.cc.set_cdpair_by_ids(from_list, into_list)
 
     def ik(self, tgt_pos: np.ndarray, tgt_rotmat: np.ndarray,
@@ -275,19 +278,21 @@ class Piper(mi.ManipulatorInterface):
 if __name__ == '__main__':
     import wrs.visualization.panda.world as wd
 
-    # Visual test for the Piper arm model.
     base = wd.World(cam_pos=[2, 0, 1], lookat_pos=[0, 0, 0])
+    arm = Piper()
+    # arm.gen_meshmodel().attach_to(base)
     mgm.gen_frame().attach_to(base)
-    arm = Piper(enable_cc=True)
-    # arm.fix_to(pos=np.array([0.1, 0.024, 0.3133]),
-    #            rotmat=rm.rotmat_from_euler(0.3, 0.8, 1.0))
-    arm.fk(arm.rand_conf(), update=True)
+
+    tgt_pos = np.array([0.378, -0.099417, 0.157612])
+    tgt_rotmat = rm.rotmat_from_euler(3.0369, -0.0483, 2.7970)
+    mgm.gen_frame(pos=tgt_pos, rotmat=tgt_rotmat).attach_to(base)
+    jnt_values = arm.ik(tgt_pos=tgt_pos, tgt_rotmat=tgt_rotmat, toggle_dbg=False)
+    print(jnt_values)
+    if jnt_values is not None:
+        arm.goto_given_conf(jnt_values=jnt_values)
+        arm.gen_meshmodel(alpha=1, toggle_tcp_frame=True).attach_to(base)
+    else:
+        print(1111)
     arm.gen_meshmodel().attach_to(base)
     # arm.show_cdprim()
     base.run()
-    # generate random joint configurations and test FK/IK consistency
-    # for _ in range(10):
-    #     rand_conf = arm.rand_conf()
-    #     pos, rotmat = arm.fk(rand_conf, update=True)
-    #     jnt = arm.ik(pos, rotmat)
-    #     print(jnt)

@@ -9,6 +9,8 @@ cycle detection, YAML serialisation, and optional Panda3D visualization.
 
 from __future__ import annotations
 
+import os
+
 from collections import defaultdict, deque
 from typing import Dict, List, Optional
 
@@ -101,6 +103,7 @@ class AssemblySequence:
         2. Every dependency step_id exists.
         3. The dependency graph is acyclic (DAG).
         4. No ``part_id`` appears in more than one step.
+        5. Every part's ``model_path`` points to an existing file.
         """
         errors: List[str] = []
         step_ids = {s.step_id for s in self._steps}
@@ -135,6 +138,14 @@ class AssemblySequence:
                     f"{seen_parts[step.part_id]} and step {step.step_id}."
                 )
             seen_parts[step.part_id] = step.step_id
+
+        # Check 5 – model_path file existence
+        for part in self._parts.values():
+            if part.model_path and not os.path.isfile(part.model_path):
+                errors.append(
+                    f"Part {part.part_id!r}: model_path "
+                    f"{part.model_path!r} does not exist on disk."
+                )
 
         if strict and errors:
             raise ValueError(
