@@ -133,6 +133,12 @@ class TplanEditor:
         self._selected_type: str | None = None   # "robot", "fixture", part_id
         self._selected_id: str | None = None
         self._color_idx = 0
+        self._selection_wireframe = None  # wireframe overlay NodePath
+
+        # Placement dropdown state
+        self._placement_menu = None       # DirectOptionMenu widget
+        self._placement_label = None      # "Placement:" label
+        self._current_placement_idx: dict[str, int] = {}  # part_id → idx
 
         # Transform
         self.transform = TransformHandler(on_mode_change=self._on_mode_change)
@@ -415,13 +421,15 @@ class TplanEditor:
             cm = self._staging_models[self._selected_id]
             cm.rgba = self._staging_colors.get(
                 self._selected_id, np.array([0.7, 0.7, 0.7, 1.0]))
+        self._clear_wireframe()
 
         self._selected_type = item_type
         self._selected_id = item_id
 
-        # Highlight new
+        # Highlight new — wireframe outline
         if item_type == "part" and item_id in self._staging_models:
-            self._staging_models[item_id].rgba = SELECTED_COLOR
+            cm = self._staging_models[item_id]
+            self._show_wireframe(cm)
 
         self._refresh_properties()
         self._refresh_parts_list()
@@ -432,10 +440,104 @@ class TplanEditor:
             cm = self._staging_models[self._selected_id]
             cm.rgba = self._staging_colors.get(
                 self._selected_id, np.array([0.7, 0.7, 0.7, 1.0]))
+        self._clear_wireframe()
         self._selected_type = None
         self._selected_id = None
         self._refresh_properties()
         self._update_status()
+
+    def _show_wireframe(self, cm):
+        """Show a wireframe overlay on the given CollisionModel."""
+        self._clear_wireframe()
+        try:
+            # Get the Panda3D node and create a wireframe copy
+            np_node = cm.pdndp
+            if np_node is None or np_node.isEmpty():
+                return
+            wire = np_node.copyTo(self.world.render)
+            wire.setRenderModeWireframe()
+            wire.setColor(0.2, 1.0, 0.4, 1.0)  # bright green wireframe
+            wire.setRenderModeThickness(2)
+            wire.setLightOff()
+            wire.setBin("fixed", 50)  # render on top
+            wire.setDepthTest(True)
+            wire.setDepthWrite(False)
+            self._selection_wireframe = wire
+        except Exception:
+            pass
+
+    def _clear_wireframe(self):
+        """Remove the wireframe selection overlay."""
+        if self._selection_wireframe is not None:
+            try:
+                self._selection_wireframe.removeNode()
+            except Exception:
+                pass
+            self._selection_wireframe = None
+
+    # ==============================================================
+    # Click-to-select (bounding sphere ray test)
+    # ==============================================================
+    def _pick_part_under_mouse(self) -> str | None:
+        """Find the closest staging part under the mouse cursor.
+
+        Uses bounding-sphere intersection for speed.
+        """
+        if not self.world.mouseWatcherNode.hasMouse():
+            return None
+        mpos = self.world.mouseWatcherNode.getMouse()
+        # Build ray in world space
+        near = Point3()
+        far = Point3()
+        self.world.camLens.extrude(mpos, near, far)
+        near_w = self.world.render.getRelativePoint(self.world.cam, near)
+        far_w = self.world.render.getRelativePoint(self.world.cam, far)
+        ray_origin = np.array([near_w.getX(), near_w.getY(), near_w.getZ()])
+        ray_dir = np.array([far_w.getX() - near_w.getX(),
+                            far_w.getY() - near_w.getY(),
+                            far_w.getZ() - near_w.getZ()])
+        ray_len = np.linalg.norm(ray_dir)
+        if ray_len < 1e-10:
+            return None
+        ray_dir /= ray_len
+
+        best_pid = None
+        best_t = float("inf")
+
+        for pid, cm in self._staging_models.items():
+            # Get bounding sphere center and radius from model
+            center = cm.pos.copy()
+            try:
+                bounds = cm.pdndp.getBounds()
+                radius = bounds.getRadius()
+                bc = bounds.getCenter()
+                center = np.array([bc.getX(), bc.getY(), bc.getZ()])
+                # Convert from local to world
+                world_center = cm.pdndp.getPos(self.world.render)
+                center = np.array([world_center.getX(),
+                                   world_center.getY(),
+                                   world_center.getZ()])
+            except Exception:
+                radius = 0.05  # fallback
+
+            # Ray-sphere intersection: |O + tD - C|^2 = r^2
+            oc = ray_origin - center
+            a = np.dot(ray_dir, ray_dir)  # should be 1
+            b = 2.0 * np.dot(oc, ray_dir)
+            c = np.dot(oc, oc) - radius * radius
+            disc = b * b - 4 * a * c
+            if disc < 0:
+                continue
+            t = (-b - np.sqrt(disc)) / (2 * a)
+            if t < 0:
+                t = (-b + np.sqrt(disc)) / (2 * a)
+            if t < 0:
+                continue
+            if t < best_t:
+                best_t = t
+                best_pid = pid
+
+        return best_pid
 
     # ==============================================================
     # Mouse-to-world (constrained to table plane)
@@ -582,9 +684,20 @@ class TplanEditor:
             if pos is not None:
                 self._apply_transform(pos, rotmat)
             self._sync_to_tplan()
+            # Re-show wireframe at new position
+            if self._selected_type == "part" and self._selected_id:
+                cm = self._staging_models.get(self._selected_id)
+                if cm:
+                    self._show_wireframe(cm)
             self._update_status()
             self.console.log_ok("Transform applied.")
-        # else: pick already handled by Panda3D mouse system
+        else:
+            # Click-to-select: pick part under mouse
+            pid = self._pick_part_under_mouse()
+            if pid:
+                self._select_item("part", pid)
+            else:
+                self._deselect_all()
 
     def _key_cycle_placement(self):
         """Cycle through stable placements for the selected part."""
@@ -623,6 +736,8 @@ class TplanEditor:
         cm.pos = new_pos
         cm.rotmat = new_rot
         cm.attach_to(self.world)
+        self._show_wireframe(cm)
+        self._current_placement_idx[self._selected_id] = next_idx
         self._sync_to_tplan()
         self._refresh_properties()
         self.console.log_info(
@@ -718,7 +833,7 @@ class TplanEditor:
         create_label(self._right_frame, "Parts (staging):", (x0, y),
                      color=TEXT_SECONDARY)
         y -= TEXT_SIZE * 1.3
-        list_h = 0.38
+        list_h = 0.35
         self._parts_scroll = DirectScrolledFrame(
             canvasSize=(0, inner_w, -0.01, list_h),
             frameSize=(0, inner_w, -list_h, 0),
@@ -728,9 +843,11 @@ class TplanEditor:
             scrollBarWidth=0.015,
             autoHideScrollBars=True,
         )
-        y -= list_h + TOP_MARGIN
+        y -= list_h + TOP_MARGIN * 2
 
-        # Steps list
+        # Steps list — with separator and extra spacing
+        create_separator(self._right_frame, (LEFT_MARGIN, y), inner_w)
+        y -= TOP_MARGIN * 2
         create_label(self._right_frame, "Step Params:", (x0, y),
                      color=TEXT_SECONDARY)
         y -= TEXT_SIZE * 1.3
@@ -746,27 +863,42 @@ class TplanEditor:
         )
         y -= list_h2 + TOP_MARGIN
 
-        # Buttons
+        # Buttons — centered in panel
         create_separator(self._right_frame, (LEFT_MARGIN, y), inner_w)
         y -= TOP_MARGIN * 2
+        # Center two buttons in the panel
+        btn_w = inner_w * 0.45
+        btn_gap = inner_w * 0.06
+        btn_x0 = LEFT_MARGIN + btn_w * 0.5 + 0.01
+        btn_x1 = btn_x0 + btn_w + btn_gap
+
+        # Brighter button color for secondary buttons
+        sec_bg = (0.30, 0.32, 0.38, 1.0)
+        sec_hover = (0.40, 0.42, 0.50, 1.0)
 
         create_accent_button(self._right_frame, "Load",
-                             (x0, y), self._on_load_file, width=BTN_W)
+                             (btn_x0, y), self._on_load_file,
+                             width=btn_w)
         create_accent_button(self._right_frame, "Save",
-                             (x0 + BTN_W + BTN_GAP, y),
-                             self._on_save_tplan, width=BTN_W)
+                             (btn_x1, y), self._on_save_tplan,
+                             width=btn_w)
         y -= TEXT_SIZE * 2.4
 
         create_button(self._right_frame, "New",
-                      (x0, y), self._on_new, width=BTN_W)
+                      (btn_x0, y), self._on_new, width=btn_w,
+                      bg=sec_bg, hover_bg=sec_hover)
         create_button(self._right_frame, "Sel Robot",
-                      (x0 + BTN_W + BTN_GAP, y),
-                      lambda: self._select_item("robot"), width=BTN_W)
+                      (btn_x1, y),
+                      lambda: self._select_item("robot"),
+                      width=btn_w,
+                      bg=sec_bg, hover_bg=sec_hover)
         y -= TEXT_SIZE * 2.4
 
         create_button(self._right_frame, "Sel Fixture",
-                      (x0, y),
-                      lambda: self._select_item("fixture"), width=BTN_W)
+                      (btn_x0, y),
+                      lambda: self._select_item("fixture"),
+                      width=btn_w,
+                      bg=sec_bg, hover_bg=sec_hover)
 
     # ==============================================================
     # GUI: Left panel (properties)
@@ -781,9 +913,10 @@ class TplanEditor:
         )
         y = -TOP_MARGIN * 2
         x0 = LEFT_MARGIN
-        label_x = x0
-        val_x = x0 + 0.14
-        entry_w = 0.10
+        label_x = x0 + 0.01
+        val_x = 0.13        # value labels (wider to avoid overlap)
+        entry_x = 0.13      # entry fields
+        entry_w = 0.12      # entry width
 
         # Section header
         create_section_header(self._left_frame, "Properties", (x0, y))
@@ -792,8 +925,9 @@ class TplanEditor:
         # ── Selected item info ───────────────────────────────
         create_label(self._left_frame, "Selected:", (label_x, y),
                      color=TEXT_SECONDARY, scale=SMALL_TEXT)
+        y -= TEXT_SIZE * 1.4
         self._prop_type = create_label(
-            self._left_frame, "(none)", (val_x, y),
+            self._left_frame, "(none)", (label_x + 0.01, y),
             color=TEXT_PRIMARY, scale=SMALL_TEXT)
         y -= TEXT_SIZE * 1.6
 
@@ -813,13 +947,15 @@ class TplanEditor:
         y -= TEXT_SIZE * 1.5
 
         self._pos_entries = {}
-        for axis_name in ["X", "Y", "Z"]:
+        for axis_name, col in [("X", (0.95, 0.30, 0.30, 1)),
+                               ("Y", (0.30, 0.85, 0.30, 1)),
+                               ("Z", (0.30, 0.55, 0.95, 1))]:
             create_label(self._left_frame, f"{axis_name}:",
-                         (label_x, y), color=TEXT_PRIMARY, scale=SMALL_TEXT)
-            e = create_entry(self._left_frame, (val_x, y),
-                             width=5, initial="0.000")
+                         (label_x, y), color=col, scale=SMALL_TEXT)
+            e = create_entry(self._left_frame, (entry_x, y),
+                             width=entry_w, initial="0.000")
             self._pos_entries[axis_name] = e
-            y -= TEXT_SIZE * 1.5
+            y -= TEXT_SIZE * 1.6
         y -= TEXT_SIZE * 0.5
 
         # ── Table height ─────────────────────────────────────
@@ -829,22 +965,52 @@ class TplanEditor:
         create_label(self._left_frame, "Table H:", (label_x, y),
                      color=TEXT_SECONDARY, scale=SMALL_TEXT)
         self._table_h_entry = create_entry(
-            self._left_frame, (val_x, y), width=5, initial="0.000")
-        y -= TEXT_SIZE * 1.8
+            self._left_frame, (entry_x, y),
+            width=entry_w, initial="0.000")
+        y -= TEXT_SIZE * 2.2
 
         # ── Primitive type ───────────────────────────────────
         create_label(self._left_frame, "Primitive:", (label_x, y),
                      color=TEXT_SECONDARY, scale=SMALL_TEXT)
+        y -= TEXT_SIZE * 1.4
         self._prim_label = create_label(
-            self._left_frame, "-", (val_x, y),
+            self._left_frame, "-", (label_x + 0.01, y),
             color=TEXT_PRIMARY, scale=SMALL_TEXT)
-        y -= TEXT_SIZE * 1.8
+        y -= TEXT_SIZE * 2.0
+
+        # ── Placement dropdown (shown when part selected) ────
+        create_separator(self._left_frame, (LEFT_MARGIN, y), inner_w)
+        y -= TOP_MARGIN * 2
+
+        self._placement_label = create_label(
+            self._left_frame, "Placement:", (label_x, y),
+            color=TEXT_SECONDARY, scale=SMALL_TEXT)
+        y -= TEXT_SIZE * 1.5
+        self._placement_menu = DirectOptionMenu(
+            text="(none)",
+            scale=SMALL_TEXT,
+            items=["(none)"],
+            initialitem=0,
+            highlightColor=(0.28, 0.56, 0.92, 0.65),
+            frameColor=(0.22, 0.23, 0.27, 1.0),
+            text_fg=TEXT_PRIMARY,
+            pos=LPoint3f(label_x, 0, y),
+            parent=self._left_frame,
+            command=self._on_placement_changed,
+            textMayChange=1,
+        )
+        # Initially hidden
+        self._placement_label.hide()
+        self._placement_menu.hide()
+        y -= TEXT_SIZE * 2.4
 
         # ── Apply button ─────────────────────────────────────
+        apply_w = inner_w * 0.5
         create_accent_button(
             self._left_frame, "Apply",
-            (label_x, y), self._on_apply_properties,
-            width=inner_w * 0.45)
+            (LEFT_MARGIN + apply_w * 0.5 + 0.01, y),
+            self._on_apply_properties,
+            width=apply_w)
 
     # ==============================================================
     # GUI: Status bar + Console
@@ -901,6 +1067,11 @@ class TplanEditor:
             for e in self._pos_entries.values():
                 e.set("0.000")
             self._prim_label["text"] = "-"
+            # Hide placement dropdown
+            if self._placement_label:
+                self._placement_label.hide()
+            if self._placement_menu:
+                self._placement_menu.hide()
             return
 
         self._prop_type["text"] = self._selected_type.capitalize()
@@ -922,8 +1093,104 @@ class TplanEditor:
                     else:
                         self._prim_label["text"] = "auto"
                     break
+            # Show & populate placement dropdown
+            self._populate_placement_menu()
         else:
             self._prim_label["text"] = "-"
+            # Hide placement dropdown
+            if self._placement_label:
+                self._placement_label.hide()
+            if self._placement_menu:
+                self._placement_menu.hide()
+
+    def _populate_placement_menu(self):
+        """Populate the placement dropdown for the selected part.
+
+        Only uses cached poses. Does NOT trigger computation
+        (FSReferencePoses uses ODE which can segfault during init).
+        """
+        if not self._placement_menu or not self._placement_label:
+            return
+        if self._selected_type != "part" or not self._selected_id:
+            self._placement_label.hide()
+            self._placement_menu.hide()
+            return
+
+        model_path = self._asmdef.model_path(self._selected_id)
+        # Only use cached poses, don't compute
+        poses = self._fs_ref_poses.get(model_path, None)
+
+        self._placement_label.show()
+        self._placement_menu.show()
+
+        if poses is None:
+            # Not yet computed — show option to compute
+            self._placement_menu["items"] = ["(press Tab to compute)"]
+            self._placement_menu.set(0)
+            return
+
+        if not poses:
+            self._placement_menu["items"] = ["(no stable poses)"]
+            self._placement_menu.set(0)
+            return
+
+        # Build items list
+        items = []
+        for i, (p, r) in enumerate(poses):
+            items.append(f"Pose {i} (z={p[2]:.3f})")
+
+        self._placement_menu["items"] = items
+
+        # Try to find current matching pose
+        pid = self._selected_id
+        cur_idx = self._current_placement_idx.get(pid, 0)
+        if cur_idx >= len(items):
+            cur_idx = 0
+        self._placement_menu.set(cur_idx)
+
+    def _on_placement_changed(self, choice):
+        """Callback when placement dropdown selection changes."""
+        if self._selected_type != "part" or not self._selected_id:
+            return
+        if not self._asmdef:
+            return
+
+        # Parse index from choice string
+        try:
+            idx = int(choice.split(" ")[1])
+        except (IndexError, ValueError):
+            return
+
+        model_path = self._asmdef.model_path(self._selected_id)
+        poses = self._compute_fs_ref_poses(model_path)
+        if not poses or idx >= len(poses):
+            return
+
+        cm = self._staging_models.get(self._selected_id)
+        if not cm:
+            return
+
+        new_rot = poses[idx][1].copy()
+        z_off = float(poses[idx][0][2])
+        new_pos = cm.pos.copy()
+        new_pos[2] = self._table_height + z_off
+
+        cm.detach()
+        cm.pos = new_pos
+        cm.rotmat = new_rot
+        cm.attach_to(self.world)
+
+        # Update wireframe
+        self._show_wireframe(cm)
+        self._current_placement_idx[self._selected_id] = idx
+        self._sync_to_tplan()
+
+        # Update position entries
+        for i, axis in enumerate(["X", "Y", "Z"]):
+            self._pos_entries[axis].set(f"{new_pos[i]:.4f}")
+
+        self.console.log_info(
+            f"Placement {idx}/{len(poses)} for {self._selected_id}")
 
     def _on_apply_properties(self):
         """Apply manual position entries."""
@@ -953,6 +1220,7 @@ class TplanEditor:
                 cm.detach()
                 cm.pos = pos
                 cm.attach_to(self.world)
+                self._show_wireframe(cm)
                 self._sync_to_tplan()
                 self.console.log_ok(
                     f"Applied pos to {self._selected_id}")
@@ -976,19 +1244,19 @@ class TplanEditor:
             return
         pw = RIGHT_W
         inner_w = pw * 2 - LEFT_MARGIN * 2
-        y = -TEXT_SIZE * 0.3
+        y = -SMALL_TEXT * 1.0
         x0 = LEFT_MARGIN * 0.5
         for pid in self._asmdef.part_ids:
             is_sel = (self._selected_type == "part"
                       and self._selected_id == pid)
             pdef = self._asmdef.get_part(pid)
-            label = f"{'▶ ' if is_sel else '  '}{pdef.name}"
+            label = f"{('> ' if is_sel else '  ')}{pdef.name}"
             create_list_item(
                 canvas, label, (x0, y), width=inner_w,
                 on_click=self._on_pick_part,
                 item_id=pid, selected=is_sel,
             )
-            y -= TEXT_SIZE * 1.4
+            y -= SMALL_TEXT * 1.8
         self._parts_scroll["canvasSize"] = (0, inner_w, y, 0)
 
     def _refresh_steps_list(self):
@@ -999,7 +1267,7 @@ class TplanEditor:
             return
         pw = RIGHT_W
         inner_w = pw * 2 - LEFT_MARGIN * 2
-        y = -TEXT_SIZE * 0.3
+        y = -SMALL_TEXT * 1.0
         x0 = LEFT_MARGIN * 0.5
         for step in self._asmdef.steps:
             params = self._tplan.get_step_params(step.step_id)
@@ -1010,7 +1278,7 @@ class TplanEditor:
                 on_click=self._on_pick_step,
                 item_id=step.step_id,
             )
-            y -= TEXT_SIZE * 1.4
+            y -= SMALL_TEXT * 1.8
         self._steps_scroll["canvasSize"] = (0, inner_w, y, 0)
 
     def _on_pick_part(self, part_id):

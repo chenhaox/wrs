@@ -52,23 +52,36 @@ class PiperSglArm(sari.SglArmRobotInterface):
             self.setup_cc()
 
     def setup_cc(self):
-        """设置自碰撞检测，参考 RealmanR"""
+        """Setup collision detection — matching Cobotta/XArm7 pattern.
+
+        Three collision detection mechanisms:
+        1. **cdpair** (self-collision): distal links vs proximal links
+        2. **extcd** (external): robot links vs obstacles in environment
+        3. **innercd**: held objects vs proximal robot links
+        """
+        # end effector — use cdelements (the proper way)
+        ee_cces = []
+        for id, cdlnk in enumerate(self.end_effector.cdelements):
+            ee_cces.append(self.cc.add_cce(cdlnk))
+        # manipulator
         mlb = self.cc.add_cce(self.manipulator.jlc.anchor.lnk_list[0])
         ml0 = self.cc.add_cce(self.manipulator.jlc.jnts[0].lnk)
         ml1 = self.cc.add_cce(self.manipulator.jlc.jnts[1].lnk)
         ml2 = self.cc.add_cce(self.manipulator.jlc.jnts[2].lnk)
         ml3 = self.cc.add_cce(self.manipulator.jlc.jnts[3].lnk)
         ml4 = self.cc.add_cce(self.manipulator.jlc.jnts[4].lnk)
-        # ml7 = self.cc.add_cce(self.end_effector.jlc.)
-        mlee = self.cc.add_cce(self.end_effector.jlc.anchor.lnk_list[0])
-        el0 = self.cc.add_cce(self.end_effector.jlc.jnts[0].lnk)
-        el1 = self.cc.add_cce(self.end_effector.jlc.jnts[1].lnk)
-
-        from_list = [ml3, ml4, mlee, el0, el1]
+        # self-collision: distal (ee + ml3, ml4) vs proximal (base, ml0, ml1)
+        from_list = ee_cces + [ml3, ml4]
         into_list = [mlb, ml0, ml1]
         self.cc.set_cdpair_by_ids(from_list, into_list)
-        self.cc.dynamic_into_list = [mlb, ml0, ml1, ml2]
-        self.cc.dynamic_ext_list = []
+        # ext collision: enable manipulator links to collide with obstacles
+        self.cc.enable_extcd_by_id_list(
+            id_list=[ml0, ml1, ml2, ml3, ml4], type="from")
+        # inner collision: held objects collide with proximal links
+        self.cc.enable_innercd_by_id_list(
+            id_list=[mlb, ml0, ml1, ml2], type="into")
+        # dynamic_ext_list: EE cces for held-object collision checking
+        self.cc.dynamic_ext_list = ee_cces[1:]
 
 
 
@@ -107,7 +120,8 @@ if __name__ == '__main__':
     robot.gen_meshmodel(toggle_jnt_frames=True, toggle_tcp_frame=True).attach_to(base)
     tgt_pos = np.array([0, 0.00, 0.7])
     robot.show_cdprim()
-    # base.run()
+    print("is robot collided", robot.is_collided())
+    base.run()
     bound_lower = -40
     bound_upper = 40
     grad = 1

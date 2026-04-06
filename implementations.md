@@ -16,9 +16,11 @@ sealp/
 ├── colliders/            ✅ DONE  — Obstacle manager, static environment, collision world
 ├── assembly_sequence/    ✅ DONE  — Data model, YAML I/O, DAG validation, builder
 ├── editor/               ✅ DONE  — Panda3D-based assembly sequence editor GUI
+├── primitives/           ✅ DONE  — Motion primitive library (transport, dual_transport)
+├── executor/             ✅ DONE  — Step-by-step sequence execution engine
 ├── examples/
 │   ├── grasp/            ✅ DONE  — Planning, filtering, visualization
-│   └── motion/           ✅ DONE  — Single-arm & dual-arm pick-and-place
+│   └── motion/           ✅ DONE  — Single-arm, dual-arm, sequence execution
 └── (future modules below)
 ```
 
@@ -67,7 +69,7 @@ Define a compact set of motion primitives for assembly operations.
 | Primitive | Description | Arms | Status |
 |-----------|-------------|------|--------|
 | `transport_place` | Pick from staging, transport, place at assembly pose | Single | ✅ Implemented |
-| `dual_transport` | Both arms coordinate to carry a large part | Dual | 🔧 Skeleton |
+| `dual_transport` | Both arms coordinate to carry a large part | Dual | ✅ Implemented |
 | `insert` | Linear insertion along a constrained axis | Single | ⬜ TODO |
 | `hold_and_insert` | One arm holds, other inserts | Dual | ⬜ TODO |
 | `regrasp` | Place on a fixture, regrasp with better grip | Single | ⬜ TODO |
@@ -84,31 +86,22 @@ Define a compact set of motion primitives for assembly operations.
 
 Execute an assembly sequence step-by-step, assigning primitives and dynamically updating the obstacle list as objects are placed.
 
-**Key pattern** (from reference `pick_and_place_chair.py`):
-```python
-mot_data_list = []
-current_conf = start_conf
-for step in assembly_sequence.get_execution_order():
-    obj = parts[step.part_id]
-    obstacle_this_round = [o for o in obs_list if o is not obj]
-    mot = planner.gen_pick_and_place(
-        obj_cmodel=obj,
-        end_jnt_values=current_conf,
-        obstacle_list=obstacle_this_round,
-        ...
-    )
-    current_conf = mot.jv_list[-1]
-    # Move obj to placed pose, add to obstacles
-    placed = obj.copy(); placed.pos = goal_pos; placed.rotmat = goal_rot
-    obs_list.append(placed)
-    mot_data_list.append(mot)
-```
+- [x] `SequenceExecutor` — iterates steps in topological order, loads models, plans grasps, dispatches primitives, tracks obstacles + joint state
+- [x] `PrimitiveSelector` — maps `Primitive` enum → concrete `MotionPrimitive` instance
+- [x] `ExecutionResult` / `StepResult` — structured results with summary
+- [x] Grasp caching by model alias (avoids re-planning for symmetric parts)
+- [x] Supports both single-arm and dual-arm robots (auto-detected)
+- [x] Demo: `sequence_execution.py` — YuanChair multi-step assembly
 
-**Files to create:**
+**Files created:**
+- `sealp/primitives/__init__.py`
+- `sealp/primitives/base.py` — `MotionPrimitive` ABC + `PrimitiveResult`
+- `sealp/primitives/transport.py` — `TransportPrimitive` (single-arm)
+- `sealp/primitives/dual_transport.py` — `DualTransportPrimitive` (dual-arm)
 - `sealp/executor/__init__.py`
-- `sealp/executor/sequence_executor.py` — step-by-step execution with obstacle updates
-- `sealp/executor/primitive_selector.py` — auto-assign primitive based on part properties
-- `sealp/examples/motion/sequence_execution.py` — demo: execute a multi-step assembly
+- `sealp/executor/sequence_executor.py` — `SequenceExecutor`, `ExecutionResult`, `StepResult`
+- `sealp/executor/primitive_selector.py` — `PrimitiveSelector`
+- `sealp/examples/motion/sequence_execution.py` — demo script
 
 ---
 
@@ -269,12 +262,4 @@ YAML config → load sequence → optimize layout → assign primitives
 | Framework | WRS (Robot Planning & Control) |
 | Visualization | Panda3D |
 | Primary robot | Piper 6-DoF (single + dual) |
-| Config format | YAML (PyYAML) |
-
-### Reference Projects
-
-| Project | Path | What it provides |
-|---------|------|-----------------|
-| tiaozhanbei | `D:\code\layout_sq\layout-planning-main\myproject\tiaozhanbei` | Grasp planning, task sim, layout optimization reference |
-| wrs_tbm | `D:\code\wrs_tbm` | Collision environment patterns, robot API adapter |
-| panda3dstudio | `D:\code\layout_sq\panda3dstudio` | Panda3D editor reference |
+| Config format | YAML (PyYAML) 
