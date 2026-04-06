@@ -26,10 +26,18 @@ sealp/
 │   ├── obstacle_manager.py    # Named obstacle dictionary
 │   ├── static_environment.py  # Config-driven static obstacles
 │   └── collision_world.py     # Unified: static env + runtime obstacles
-├── pick_and_place/
+├── examples/
 │   ├── __init__.py
-│   ├── piper_pnp.py          # High-level Piper pick-and-place wrapper
-│   └── pnp_demo.py           # Runnable demo: Piper arm FK/IK test
+│   ├── grasp/
+│   │   ├── __init__.py
+│   │   ├── planning.py        # Antipodal grasp planning with Piper gripper
+│   │   ├── filtering.py       # Filter grasps by orientation/position/width
+│   │   └── visualization.py   # Visualize & analyze saved grasps
+│   └── motion/
+│       ├── __init__.py
+│       ├── piper_pnp.py       # PiperPickAndPlace / DualPiperPickAndPlace
+│       ├── pnp_demo.py        # Single-arm pick-and-place demo
+│       └── dual_arm_pnp.py    # Dual-arm concurrent pick-and-place demo
 ├── editor/
 │   └── ...
 └── assembly_sequence/
@@ -98,7 +106,23 @@ ROBOT_REGISTRY["my_robot"] = _make_my_robot
 # Now you can use type: "my_robot" in config YAML
 ```
 
-### 2. Collision Environment
+### 2. Grasp Planning
+
+```python
+from sealp.examples.grasp.planning import plan_grasps
+import wrs.modeling.collision_model as mcm
+
+# Plan grasps on an object
+obj = mcm.CollisionModel("my_object.stl")
+grasp_collection, gripper = plan_grasps(obj, max_samples=100)
+grasp_collection.save_to_disk("my_object_grasps.pickle")
+
+# Filter grasps
+from sealp.examples.grasp.filtering import filter_by_orientation
+filtered = filter_by_orientation(grasp_collection, direction="down")
+```
+
+### 3. Collision Environment
 
 ```python
 from sealp.colliders import CollisionWorld
@@ -120,7 +144,7 @@ robot.is_collided(obstacle_list=world.obstacle_list)
 world.show(base, robot=robot, toggle_cdprim=True)
 ```
 
-### 3. Assembly Sequence (YAML)
+### 4. Assembly Sequence (YAML)
 
 **Create and save:**
 
@@ -151,14 +175,26 @@ for step in seq.get_execution_order():
     print(f"Step {step.step_id}: assemble {step.part_id}")
 ```
 
-### 4. Run Demos
+### 5. Run Demos
 
 ```bash
 # Config demo (loads config → creates robot → visualizes environment)
 python -m sealp.config.demo_config
 
-# Piper arm demo (opens Panda3D viewer)
-python -m sealp.pick_and_place.pnp_demo
+# Grasp planning demo (plan + save + visualize grasps)
+python -m sealp.examples.grasp.planning
+
+# Grasp filtering demo (filter by orientation/position)
+python -m sealp.examples.grasp.filtering
+
+# Grasp visualization demo (statistics + 3D view)
+python -m sealp.examples.grasp.visualization
+
+# Single-arm pick-and-place demo
+python -m sealp.examples.motion.pnp_demo
+
+# Dual-arm pick-and-place demo
+python -m sealp.examples.motion.dual_arm_pnp
 
 # Assembly sequence demo (terminal output + generates YAML)
 python -m sealp.assembly_sequence.demo_sequence

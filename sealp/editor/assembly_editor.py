@@ -40,6 +40,7 @@ import wrs.basis.robot_math as rm
 from sealp.assembly_sequence import (
     AssemblySequence, AssemblyPart, AssemblyStep,
     save_sequence, load_sequence, SequenceGenerator,
+    AssemblyDef, PartDef, StepDef,
 )
 from sealp.editor.editor_gui import (
     create_panel, create_section_header, create_label,
@@ -106,10 +107,11 @@ class AssemblyEditor:
         self.world.taskMgr.add(self._editor_update, "editor_update")
 
         # ── Load initial file ────────────────────────────────
+        self._asmdef = None  # AssemblyDef reference when loaded from .asmdef
         if sequence_file and os.path.isfile(sequence_file):
             self._do_load(sequence_file)
         else:
-            self.console.log_info("Ready.  Load a YAML or add parts.")
+            self.console.log_info("Ready.  Load an .asmdef or .yaml file.")
 
     # ==============================================================
     # Ground grid
@@ -245,11 +247,11 @@ class AssemblyEditor:
         create_separator(self._right_frame, (LEFT_MARGIN, y), inner_w)
         y -= TOP_MARGIN * 2
 
-        create_accent_button(self._right_frame, "Load YAML",
-                             (x0, y), self._on_load_yaml, width=BTN_W)
-        create_accent_button(self._right_frame, "Save YAML",
+        create_accent_button(self._right_frame, "Load",
+                             (x0, y), self._on_load_file, width=BTN_W)
+        create_accent_button(self._right_frame, "Save",
                              (x0 + BTN_W + BTN_GAP, y),
-                             self._on_save_yaml, width=BTN_W)
+                             self._on_save_file, width=BTN_W)
         y -= TEXT_SIZE * 2.4
         create_button(self._right_frame, "New",
                       (x0, y), self._on_new_sequence, width=BTN_W)
@@ -401,8 +403,8 @@ class AssemblyEditor:
         w.accept("escape", self._key_escape)
         w.accept("mouse1", self._key_confirm_or_pick)
         w.accept("delete", self._on_remove_part)
-        w.accept("control-s", self._on_save_yaml)
-        w.accept("control-o", self._on_load_yaml)
+        w.accept("control-s", self._on_save_file)
+        w.accept("control-o", self._on_load_file)
 
     # ==============================================================
     # Key handlers
@@ -631,15 +633,20 @@ class AssemblyEditor:
     # ==============================================================
     # File I/O
     # ==============================================================
-    def _on_load_yaml(self):
+    def _on_load_file(self):
         try:
             import tkinter as tk
             from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()
             filepath = filedialog.askopenfilename(
-                title="Load Assembly Sequence",
-                filetypes=[("YAML", "*.yaml *.yml"), ("All", "*.*")],
+                title="Load Assembly",
+                filetypes=[
+                    ("Assembly files", "*.asmdef *.yaml *.yml"),
+                    ("Assembly Def", "*.asmdef"),
+                    ("YAML (legacy)", "*.yaml *.yml"),
+                    ("All", "*.*"),
+                ],
             )
             root.destroy()
             if filepath:
@@ -648,12 +655,21 @@ class AssemblyEditor:
             self.console.log_warn(f"Load error: {e}")
 
     def _do_load(self, filepath: str):
+        ext = os.path.splitext(filepath)[1].lower()
         try:
-            self.sequence = load_sequence(filepath)
-            self._current_file = filepath
+            if ext == ".asmdef":
+                self._do_load_asmdef(filepath)
+            else:
+                self._do_load_yaml(filepath)
         except Exception as e:
             self.console.log_warn(f"Failed to load {filepath}: {e}")
-            return
+            import traceback; traceback.print_exc()
+
+    def _do_load_yaml(self, filepath: str):
+        """Load legacy .yaml format."""
+        self.sequence = load_sequence(filepath)
+        self._current_file = filepath
+        self._asmdef = None  # no asmdef backing
         for pid in list(self.part_mgr.part_ids):
             self.part_mgr.remove_part(pid)
         for part in self.sequence.parts:
@@ -663,41 +679,190 @@ class AssemblyEditor:
         self._refresh_properties()
         self._update_status()
         self.console.log_ok(
-            f"Loaded: {self.sequence.name} "
+            f"Loaded (YAML): {self.sequence.name} "
             f"({self.sequence.n_parts} parts, {self.sequence.n_steps} steps)")
 
-    def _on_save_yaml(self):
+    def _do_load_asmdef(self, filepath: str):
+        """Load .asmdef and convert to internal AssemblySequence."""
+        asmdef = AssemblyDef.load(filepath)
+        asmdef.validate(strict=True)
+        self._asmdef = asmdef
+        self._current_file = filepath
+
+        # Convert to legacy AssemblySequence for internal use
+        world_poses = asmdef.compute_world_poses()
+        seq = AssemblySequence(name=asmdef.name, description=asmdef.description)
+
+        for pid, pdef in asmdef.parts.items():
+            model_path = asmdef.model_path(pid)
+            w_pos, w_rot = world_poses.get(pid, (np.zeros(3), np.eye(3)))
+            seq.add_part(AssemblyPart(
+                part_id=pid,
+                name=pdef.name,
+                model_path=model_path,
+                init_pos=w_pos.copy(),
+                init_rotmat=w_rot.copy(),
+                assembly_pos=w_pos.copy(),
+                assembly_rotmat=w_rot.copy(),
+                mass=pdef.mass,
+                metadata=pdef.metadata.copy(),
+            ))
+
+        for sdef in asmdef.steps:
+            w_pos, w_rot = world_poses.get(sdef.part_id,
+                                           (np.zeros(3), np.eye(3)))
+            seq.add_step(AssemblyStep(
+                step_id=sdef.step_id,
+                part_id=sdef.part_id,
+                parent_part_id=sdef.parent_id,
+                assembly_pos=w_pos.copy(),
+                assembly_rotmat=w_rot.copy(),
+                dependencies=list(sdef.deps),
+                notes=sdef.notes,
+                metadata=sdef.metadata.copy(),
+            ))
+
+        self.sequence = seq
+        for pid in list(self.part_mgr.part_ids):
+            self.part_mgr.remove_part(pid)
+        for part in self.sequence.parts:
+            self.part_mgr.load_part(part)
+        self._refresh_parts_list()
+        self._refresh_steps_list()
+        self._refresh_properties()
+        self._update_status()
+        sym_info = ""
+        if asmdef.symmetry_groups:
+            sym_info = f" | sym: {list(asmdef.symmetry_groups.keys())}"
+        self.console.log_ok(
+            f"Loaded (.asmdef): {asmdef.name} "
+            f"({asmdef.n_parts} parts, {asmdef.n_steps} steps{sym_info})")
+
+    def _on_save_file(self):
         self.part_mgr.sync_to_sequence(self.sequence)
+        # Determine default format from current file
+        cur_ext = ".asmdef"
+        if self._current_file:
+            cur_ext = os.path.splitext(self._current_file)[1].lower()
         try:
             import tkinter as tk
             from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()
             filepath = filedialog.asksaveasfilename(
-                title="Save Assembly Sequence",
-                defaultextension=".yaml",
-                filetypes=[("YAML", "*.yaml *.yml"), ("All", "*.*")],
-                initialfile=self._current_file or "assembly.yaml",
+                title="Save Assembly",
+                defaultextension=cur_ext,
+                filetypes=[
+                    ("Assembly Def", "*.asmdef"),
+                    ("YAML (legacy)", "*.yaml *.yml"),
+                    ("All", "*.*"),
+                ],
+                initialfile=self._current_file or "assembly.asmdef",
             )
             root.destroy()
             if filepath:
-                save_sequence(self.sequence, filepath)
+                ext = os.path.splitext(filepath)[1].lower()
+                if ext == ".asmdef":
+                    self._do_save_asmdef(filepath)
+                else:
+                    save_sequence(self.sequence, filepath)
                 self._current_file = filepath
                 self.console.log_ok(f"Saved to {filepath}")
         except Exception as e:
             self.console.log_warn(f"Save error: {e}")
 
+    def _do_save_asmdef(self, filepath: str):
+        """Convert internal state back to .asmdef and save."""
+        # If we loaded from .asmdef, update it; otherwise create new
+        if hasattr(self, '_asmdef') and self._asmdef:
+            asmdef = self._asmdef
+            # Update world poses from editor state
+            # Re-derive relative poses from current world poses
+            world_poses = {}
+            for pid in asmdef.part_ids:
+                entry = self.part_mgr.entries.get(pid)
+                if entry and entry.cmodel:
+                    world_poses[pid] = (
+                        entry.cmodel.pos.copy(),
+                        entry.cmodel.rotmat.copy())
+                else:
+                    world_poses[pid] = (np.zeros(3), np.eye(3))
+            # Fixture pose
+            world_poses["fixture"] = (np.zeros(3), np.eye(3))
+            # Update step rel_pos from world poses
+            for step in asmdef._steps:
+                if step.part_id in world_poses and step.parent_id in world_poses:
+                    p_pos, p_rot = world_poses[step.parent_id]
+                    w_pos, w_rot = world_poses[step.part_id]
+                    # rel_pos = inv(parent_rot) @ (world_pos - parent_pos)
+                    step.rel_pos = p_rot.T @ (w_pos - p_pos)
+                    step.rel_rotmat = p_rot.T @ w_rot
+        else:
+            # Create new asmdef from scratch
+            asmdef = AssemblyDef(
+                name=self.sequence.name,
+                description=getattr(self.sequence, 'description', ''),
+            )
+            # build model library (dedupe by path)
+            model_aliases = {}
+            for part in self.sequence.parts:
+                path = part.model_path
+                if path not in model_aliases:
+                    alias = Path(path).stem
+                    # ensure unique alias
+                    base_alias = alias
+                    i = 1
+                    while alias in asmdef.models:
+                        alias = f"{base_alias}_{i}"
+                        i += 1
+                    asmdef.add_model(alias, path)
+                    model_aliases[path] = alias
+            # add parts
+            for part in self.sequence.parts:
+                asmdef._parts[part.part_id] = PartDef(
+                    part_id=part.part_id,
+                    name=part.name,
+                    model=model_aliases[part.model_path],
+                    mass=part.mass,
+                )
+            # add steps with relative poses
+            world_poses = {"fixture": (np.zeros(3), np.eye(3))}
+            for step in self.sequence.steps:
+                entry = self.part_mgr.entries.get(step.part_id)
+                if entry and entry.cmodel:
+                    world_poses[step.part_id] = (
+                        entry.cmodel.pos.copy(),
+                        entry.cmodel.rotmat.copy())
+            for step in self.sequence.steps:
+                p_pos, p_rot = world_poses.get(
+                    step.parent_part_id, (np.zeros(3), np.eye(3)))
+                w_pos, w_rot = world_poses.get(
+                    step.part_id, (np.zeros(3), np.eye(3)))
+                rel_pos = p_rot.T @ (w_pos - p_pos)
+                rel_rotmat = p_rot.T @ w_rot
+                asmdef.add_step(StepDef(
+                    step_id=step.step_id,
+                    part_id=step.part_id,
+                    parent_id=step.parent_part_id,
+                    rel_pos=rel_pos,
+                    rel_rotmat=rel_rotmat,
+                    deps=list(step.dependencies),
+                    notes=step.notes,
+                ))
+        asmdef.save(filepath)
+
     def _on_new_sequence(self):
         for pid in list(self.part_mgr.part_ids):
             self.part_mgr.remove_part(pid)
         self.sequence = AssemblySequence(name="New Assembly")
+        self._asmdef = None
         self._current_file = None
         self._selected_step_id = None
         self._refresh_parts_list()
         self._refresh_steps_list()
         self._refresh_properties()
         self._update_status()
-        self.console.log_info("New empty sequence created.")
+        self.console.log_info("New empty assembly created.")
 
     # ==============================================================
     # Properties panel

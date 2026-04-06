@@ -11,164 +11,282 @@ workspace layout optimization for dual-arm furniture assembly.
 
 | Module | Description |
 |--------|------------|
-| `pick_and_place/` | Pick-and-place planning using the Piper 6-DoF arm |
-| `assembly_sequence/` | YAML-based assembly sequence data format & I/O |
-| `editor/` | Interactive Panda3D-based assembly sequence editor |
+| `config/` | YAML project config, robot registry, setup facade |
+| `colliders/` | Obstacle manager, static environment, collision world |
+| `assembly_sequence/` | Assembly data formats (`.asmdef`, `.tplan`) & I/O |
+| `editor/` | Interactive Panda3D-based assembly editor |
+| `examples/` | Grasp planning, pick-and-place, and demo scripts |
+| `assets/` | 3D models (STL) for assemblies |
 
 ---
 
-## 1. Piper Robot Migration
+## 1. Assembly Data Formats (`assembly_sequence/`)
 
-The AgileX PiPER 6-DoF arm was migrated from `wrs-main` to this project:
+SEALP uses **two file formats** to cleanly separate product definition from task planning:
 
-- **Source:** `d:\code\HTW\wrs-main\wrs\robot_sim\manipulators\piper\`
-- **Destination:** `d:\code\layout_sq\wrs\wrs\robot_sim\manipulators\piper\`
-- **Files:** `piper.py`, `piper_description_v100_camera.urdf`, `meshes/`
+### 1.1 Assembly Definition — `.asmdef`
 
-The Piper class inherits from `ManipulatorInterface` and supports:
-- 6 revolute joints with limits from the URDF
-- STL collision meshes for each link
-- Optional TracIK solver (falls back to numerical IK)
+**Purpose:** Defines the *product* (what is being assembled).  Contains only
+information inherent to the assembly — not how or where a robot executes it.
 
----
-
-## 2. Pick-and-Place Module (`pick_and_place/`)
-
-### `piper_pnp.py` — PiperPickAndPlace
-
-High-level wrapper around `wrs.manipulation.pick_place.PickPlacePlanner`:
-- Instantiates a Piper arm with collision checking
-- Provides `pick_and_place()` and `pick_and_moveto()` convenience methods
-- Includes `animate()` static method for Panda3D visualization
-
-### `pnp_demo.py`
-
-Smoke test that:
-1. Creates a Panda3D world
-2. Shows the Piper arm in home + random FK configuration
-3. Tests FK→IK round-trip
-
----
-
-## 3. Assembly Sequence Format (`assembly_sequence/`)
-
-### Data Model
+**File:** `asmdef.py` → `AssemblyDef`, `PartDef`, `StepDef`
 
 ```
-AssemblySequence
+AssemblyDef
+├── format_version            # "1.0"
 ├── name, description
-├── parts: Dict[str, AssemblyPart]
-│   └── part_id, name, model_path, init_pos, init_rotmat,
-│       assembly_pos, assembly_rotmat, mass, color_rgba, metadata
-└── steps: List[AssemblyStep]
-    └── step_id, part_id, parent_part_id, assembly_pos,
-        assembly_rotmat, dependencies, primitive_type, grasp_id, notes
+├── models: Dict[alias, path] # shared model library (deduplicated)
+├── symmetry_groups           # interchangeable parts (e.g. 4 identical legs)
+├── parts: Dict[id, PartDef]
+│   └── part_id, name, model (alias), mass, metadata
+└── steps: List[StepDef]      # assembly DAG
+    └── step_id, part_id, parent_id, rel_pos, rel_rotmat, deps, notes
 ```
 
-### YAML Format
+**Key design decisions:**
+- **Relative poses** — `rel_pos`/`rel_rotmat` relative to parent part, not world
+- **Model library** — STL paths declared once by alias, referenced by parts
+- **Symmetry groups** — enables layout optimizer to permute interchangeable parts
+- **No task data** — no staging positions, colors, grasp IDs, primitive types
 
-Parts and steps are serialized to/from YAML via PyYAML. Rotation matrices
-are stored as nested lists. Positions as flat lists.
-
-### Validation
-
-`AssemblySequence.validate()` checks:
-1. Every step references a known part_id
-2. Every dependency step_id exists
-3. The dependency graph is acyclic (DAG via Kahn's algorithm)
-4. No part_id appears in more than one step
-
-### Builder Pattern
-
-`SequenceGenerator` provides a fluent API:
+**API:**
 ```python
-seq = (SequenceGenerator("name")
-       .add_part("id", "Name", "file.stl", assembly_pos=[...])
-       .add_step(0, "id", parent="fixture")
-       .build())
+from sealp.assembly_sequence import AssemblyDef, PartDef, StepDef
+
+asm = AssemblyDef.load("chair.asmdef")
+asm.parts              # dict[str, PartDef]
+asm.models             # dict[str, str] — alias → abs path
+asm.symmetry_groups    # dict[str, list[str]]
+asm.steps              # list[StepDef]
+
+# Compute absolute world poses from relative
+poses = asm.compute_world_poses(fixture_pos=np.array([0, 0, 0]))
+# → {"seat": (pos, rotmat), "leg_fl": (pos, rotmat), ...}
+
+asm.save("output.asmdef")
 ```
+
+### 1.2 Task Plan — `.tplan`
+
+**Purpose:** Task-specific execution plan.  References an `.asmdef` and adds all
+data that varies per execution: staging positions, motion primitives, grasp
+selections, robot configuration, fixture position.
+
+Typically produced by the **layout optimizer** or configured by hand.
+
+**File:** `tplan.py` → `TaskPlan`, `StagingPose`, `StepParams`, `RobotConfig`
+
+```
+TaskPlan
+├── format_version            # "1.0"
+├── name, description
+├── assembly_file             # path to referenced .asmdef
+├── fixture_pos, fixture_rotmat  # assembly station world pose
+├── robot: RobotConfig
+│   └── robot_type, base_pos, base_rotmat, start_conf
+├── staging: Dict[part_id, StagingPose]
+│   └── part_id, pos, rotmat  # where robot picks each part
+└── step_params: Dict[step_id, StepParams]
+    └── step_id, primitive, grasp_id, approach_distance,
+        depart_distance, approach_direction, speed_factor
+```
+
+**Key design decisions:**
+- **References `.asmdef`** — assembly link, loaded lazily via `plan.assembly`
+- **Fixture pose** — enables placing the same assembly at different workspace locations
+- **Per-step params** — primitive type and grasp ID assigned per step (auto or explicit)
+- **Robot config** — base position, type, and initial configuration
+- **Defaults omitted** — only non-default values are serialized (compact output)
+
+**API:**
+```python
+from sealp.assembly_sequence import TaskPlan, StepParams
+
+plan = TaskPlan.load("chair_plan.tplan")
+plan.assembly              # linked AssemblyDef (lazy-loaded)
+plan.fixture_pos           # assembly station world position
+plan.staging               # dict[part_id → StagingPose]
+plan.step_params           # dict[step_id → StepParams]
+plan.robot                 # RobotConfig
+
+# Compute assembly world poses using fixture position
+poses = plan.compute_assembly_world_poses()
+
+plan.save("output.tplan")
+```
+
+### 1.3 Format Comparison
+
+| Data | `.asmdef` | `.tplan` | Legacy `.yaml` |
+|------|:---------:|:--------:|:--------------:|
+| Part identity & model | ✅ | — (ref) | ✅ |
+| Assembly structure (DAG) | ✅ | — (ref) | ✅ |
+| Assembly poses (relative) | ✅ | — | — |
+| Assembly poses (absolute) | computed | computed | ✅ |
+| Model library (deduplicated) | ✅ | — | — |
+| Symmetry groups | ✅ | — | — |
+| Staging positions | — | ✅ | ✅ (`init_pos`) |
+| Primitive type | — | ✅ | ✅ |
+| Grasp ID | — | ✅ | ✅ |
+| Robot config | — | ✅ | — |
+| Fixture world pose | — | ✅ | — |
+| Color (visualization) | — | — | ✅ |
+
+### 1.4 Legacy Format (`.yaml`)
+
+The original `AssemblySequence` / `AssemblyPart` / `AssemblyStep` classes are
+retained for backward compatibility.  The editor supports loading both formats.
+
+### 1.5 Validation
+
+`AssemblyDef.validate()` checks:
+1. Every step references a known `part_id`
+2. Every dependency `step_id` exists
+3. The dependency graph is acyclic (DAG — Kahn's algorithm)
+4. No `part_id` appears in more than one step
+5. Every part's model alias exists in the model library
+6. Every symmetry group member exists as a part
 
 ---
 
-## 4. Assembly Sequence Editor (`editor/`)
+## 2. Assembly Editor (`editor/`)
 
 ### Architecture
 
 ```
-assembly_editor.py     ←  Main application (extends WRS World)
-    ├── editor_gui.py      ←  DirectGUI widget factories
+assembly_editor.py       ← Main application (extends WRS World)
+    ├── editor_gui.py    ← DirectGUI widget factories (dark theme)
     ├── transform_handler.py ← Grab/Rotate state machine
-    ├── part_manager.py    ←  3D scene part management
-    └── run_editor.py      ←  Entry point
+    ├── part_manager.py  ← 3D scene part management
+    └── run_editor.py    ← Entry point
 ```
+
+### Supported Formats
+
+- **`.asmdef`** (preferred) — loads via bridge, computes world poses,
+  saves back with re-derived relative poses
+- **`.yaml`** (legacy) — direct load/save via `sequence_io`
+- Auto-detected by file extension
 
 ### Key Bindings
 
 | Key | Action |
 |-----|--------|
-| `G` | Enter **grab/position** mode |
-| `R` | Enter **rotate** mode |
-| `X` / `Y` / `Z` | Constrain to axis (during grab/rotate) |
-| `Escape` | Cancel transform / deselect |
-| `Delete` | Remove selected part |
-| `Ctrl+S` | Save YAML |
-| `Ctrl+O` | Load YAML |
-| Left click | Confirm transform / select part |
-
-### GUI Layout
-
-- **Right sidebar:** Parts list (scrollable, selectable), Assembly steps list,
-  Load/Save/New buttons
-- **Left sidebar:** Properties panel — position (X,Y,Z), rotation (Rx,Ry,Rz),
-  part info, Apply button
-- **Status bar:** Current mode, selected part, active step
+| `G` | Grab/position mode |
+| `R` | Rotate mode |
+| `X`/`Y`/`Z` | Constrain to axis |
+| `Escape` | Cancel / deselect |
+| `Delete` | Remove part |
+| `Ctrl+S` | Save |
+| `Ctrl+O` | Load |
 
 ### Transform System
 
-`TransformHandler` implements a state machine:
-- `NONE → GRAB` (via G key): mouse motion → XY translation (or Z with Z key)
-- `NONE → ROTATE` (via R key): mouse motion → rotation around axis
-- `confirm()` → apply and return to NONE
-- `cancel()` → revert to snapshot pose
-
-Axis constraints use Rodrigues' rotation formula for arbitrary axis rotation.
-
-### Part Management
-
-`PartManager` handles:
-- Loading STL/OBJ into `CollisionModel` instances
-- Auto-assigning distinct colors from a tab10-like palette
-- Selection highlighting (yellow)
-- Assembly ghost visualization (semi-transparent copy at target pose)
-- Pose synchronization back to `AssemblySequence`
-
-### File I/O
-
-Uses `tkinter.filedialog` for native OS file picker dialogs.
-Integrates with `sealp.assembly_sequence.sequence_io` for YAML serialization.
+`TransformHandler`: state machine with `NONE → GRAB/ROTATE → confirm/cancel`.
+- Grab: ray-plane intersection for XY, mouse-Y delta for Z axis
+- Rotate: Rodrigues' formula for arbitrary axis rotation
 
 ---
 
-## 5. Dependencies
+## 3. Examples Module (`examples/`)
+
+### `examples/grasp/`
+- `planning.py` — antipodal grasp planning with `plan_grasps()`
+- `filtering.py` — filter by orientation/position/width
+- `visualization.py` — statistics + 3D rendering
+
+### `examples/motion/`
+- `piper_pnp.py` — `PiperPickAndPlace` / `DualPiperPickAndPlace`
+- `pnp_demo.py` — single-arm FK/IK test
+- `dual_arm_pnp.py` — dual-arm concurrent demo
+
+---
+
+## 4. Config & Colliders
+
+### Config (`config/`)
+- YAML-based `SEALPConfig` with robot type, environment, and sequence file
+- Robot registry (piper, cobotta, nova2_wg, xarmlite6_wg)
+- `setup_from_config()` — unified initialization facade
+
+### Colliders (`colliders/`)
+- `ObstacleManager` — named obstacle dictionary
+- `StaticEnvironment` — config-driven obstacle definitions (box, STL)
+- `CollisionWorld` — combines static + runtime obstacles
+
+---
+
+## 5. Piper Robot Migration
+
+Migrated from `wrs-main`:
+- **Source:** `d:\code\HTW\wrs-main\wrs\robot_sim\manipulators\piper\`
+- **Destination:** `d:\code\layout_sq\wrs\wrs\robot_sim\manipulators\piper\`
+- 6 revolute joints, URDF-based, STL collision meshes
+
+---
+
+## 6. Dependencies
 
 | Package | Purpose |
 |---------|---------|
 | WRS | Robot planning & control framework (Panda3D, numpy) |
-| PyYAML | Assembly sequence YAML serialization |
+| PyYAML | `.asmdef` / `.tplan` serialization |
 | tkinter | File dialogs in the editor (stdlib) |
 
 ---
 
-## 6. Entry Points
+## 7. Entry Points
 
 ```bash
-# Piper arm demo
-python -m sealp.pick_and_place.pnp_demo
+# Generate yuanchair assembly files
+python -m sealp.assembly_sequence.gen_yuanchair_asmdef   # → yuanchair.asmdef
+python -m sealp.assembly_sequence.gen_yuanchair_tplan     # → yuanchair_plan.tplan
 
-# Assembly sequence demo (terminal, generates YAML)
-python -m sealp.assembly_sequence.demo_sequence
-
-# Assembly editor (GUI)
+# Assembly editor
 python -m sealp.editor.run_editor
-python -m sealp.editor.run_editor path/to/assembly.yaml
+python -m sealp.editor.run_editor path/to/assembly.asmdef
+
+# Grasp demos
+python -m sealp.examples.grasp.planning
+python -m sealp.examples.grasp.filtering
+python -m sealp.examples.grasp.visualization
+
+# Motion demos
+python -m sealp.examples.motion.pnp_demo
+python -m sealp.examples.motion.dual_arm_pnp
+
+# Legacy YAML demo
+python -m sealp.assembly_sequence.demo_sequence
 ```
+
+---
+
+## 8. Pipeline Overview (Future)
+
+```
+                    ┌────────────────────┐
+                    │   chair.asmdef     │  ← product definition
+                    └────────┬───────────┘
+                             │
+                    ┌────────▼───────────┐
+                    │  Layout Optimizer   │  ← constrained optimization
+                    │  (Phase 3)         │
+                    └────────┬───────────┘
+                             │
+                    ┌────────▼───────────┐
+                    │  chair_plan.tplan  │  ← optimizer output
+                    └────────┬───────────┘
+                             │
+                    ┌────────▼───────────┐
+                    │ Sequence Executor  │  ← motion planning + execution
+                    │  (Phase 2)         │
+                    └────────┬───────────┘
+                             │
+                    ┌────────▼───────────┐
+                    │  Robot Execution   │
+                    └────────────────────┘
+```
+
+The `.asmdef` defines *what* to build.  The layout optimizer produces a `.tplan`
+defining *where* (staging, fixture, robot base) and *how* (primitives, grasps).
+The executor reads both files and generates motion plans.
