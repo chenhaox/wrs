@@ -73,6 +73,7 @@ import wrs.robot_sim.manipulators.manipulator_interface as mi
 import wrs.modeling.geometric_model as mgm
 import wrs.modeling.collision_model as mcm
 
+
 # Attempt to import the Trac IK solver.  If unavailable, numerical IK
 # provided by the joint linkage controller (JLC) will be used instead.
 
@@ -152,7 +153,8 @@ class Piper(mi.ManipulatorInterface):
         self.jlc.jnts[2].loc_motion_ax = np.array([0.0, 0.0, 1.0])
         self.jlc.jnts[2].motion_range = np.array([-2.697, 0.0])
         self.jlc.jnts[2].lnk.cmodel = mcm.CollisionModel(
-            os.path.join(current_file_dir, "meshes", "link3.STL"))
+            os.path.join(current_file_dir, "meshes", "link3.STL"),
+            cdprim_type=mcm.const.CDPrimType.USER_DEFINED, userdef_cdprim_fn=self._custom_cdprimitive_lnk3_fn)
         self.jlc.jnts[2].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link3 has a yaw offset of −1.75 rad on the collision mesh【338922380148493†L134-L137】
         self.jlc.jnts[2].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, -1.75)
@@ -221,6 +223,28 @@ class Piper(mi.ManipulatorInterface):
         if self.cc is not None:
             self.setup_cc()
 
+    @staticmethod
+    def _custom_cdprimitive_lnk3_fn(name, ex_radius):
+        pdcnd = mcm.CollisionNode(name + "_cnode")
+        collision_primitive_c0 = mcm.CollisionBox(mcm.Point3(0.0, 0.0, 0.0),
+                                                  x=0.03 + ex_radius, y=0.03 + ex_radius, z=0.037 + ex_radius)
+        pdcnd.addSolid(collision_primitive_c0)
+        collision_primitive_c1 = mcm.CollisionBox(mcm.Point3(-0.015, -0.04, 0.0),
+                                                  x=0.025 + ex_radius, y=0.015 + ex_radius, z=0.041 + ex_radius)
+        pdcnd.addSolid(collision_primitive_c1)
+        collision_primitive_c2 = mcm.CollisionBox(mcm.Point3(-0.02, -0.1, 0.0),
+                                                  x=0.02 + ex_radius, y=0.06 + ex_radius, z=0.024 + ex_radius)
+        pdcnd.addSolid(collision_primitive_c2)
+        collision_primitive_c3 = mcm.CollisionBox(mcm.Point3(-0.022, -0.182, 0.0),
+                                                  x=0.029 + ex_radius, y=0.033 + ex_radius, z=0.029 + ex_radius)
+        pdcnd.addSolid(collision_primitive_c3)
+        collision_primitive_c4 = mcm.CollisionBox(mcm.Point3(-0.054, -0.175, 0.0),
+                                                  x=0.003 + ex_radius, y=0.01 + ex_radius, z=0.01 + ex_radius)
+        pdcnd.addSolid(collision_primitive_c4)
+        cdprim = mcm.NodePath(name + "_cdprim")
+        cdprim.attachNewNode(pdcnd)
+        return cdprim
+
     def setup_cc(self) -> None:
         """Configure pairs of links for self‑collision checking."""
         # Add each link to the collision checker and establish
@@ -279,10 +303,10 @@ if __name__ == '__main__':
     import wrs.visualization.panda.world as wd
 
     base = wd.World(cam_pos=[2, 0, 1], lookat_pos=[0, 0, 0])
-    arm = Piper()
+    arm = Piper(enable_cc=True)
     # arm.gen_meshmodel().attach_to(base)
     mgm.gen_frame().attach_to(base)
-
+    arm.show_cdprim()
     tgt_pos = np.array([0.378, -0.099417, 0.157612])
     tgt_rotmat = rm.rotmat_from_euler(3.0369, -0.0483, 2.7970)
     mgm.gen_frame(pos=tgt_pos, rotmat=tgt_rotmat).attach_to(base)

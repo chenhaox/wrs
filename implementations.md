@@ -18,9 +18,11 @@ sealp/
 ├── editor/               ✅ DONE  — Panda3D-based assembly sequence editor GUI
 ├── primitives/           ✅ DONE  — Motion primitive library (transport, dual_transport)
 ├── executor/             ✅ DONE  — Step-by-step sequence execution engine
+├── layout/               🔧 WIP   — Layout representation, feasibility, optimizer
 ├── examples/
 │   ├── grasp/            ✅ DONE  — Planning, filtering, visualization
-│   └── motion/           ✅ DONE  — Single-arm, dual-arm, sequence execution
+│   ├── motion/           ✅ DONE  — Single-arm, dual-arm, sequence execution
+│   └── layout/           ✅ DONE  — Layout eval, comparison, optimization
 └── (future modules below)
 ```
 
@@ -105,7 +107,7 @@ Execute an assembly sequence step-by-step, assigning primitives and dynamically 
 
 ---
 
-## Phase 3: Layout Optimization (⬜ Planned)
+## Phase 3: Layout Optimization (🔧 In Progress)
 
 ### 3.1 Feasibility Evaluation
 
@@ -117,24 +119,25 @@ For a candidate layout (robot base positions + part staging positions), evaluate
 3. Compute manipulability score at key poses
 4. Return a `FeasibilityReport`: per-step pass/fail + aggregate score
 
-**Files to create:**
-- `sealp/layout/feasibility.py` — `evaluate_layout(layout, sequence, robot)`
-- `sealp/layout/reachability.py` — voxelized reachability map (cached)
-- `sealp/layout/manipulability.py` — workspace manipulability scoring
+- [x] `check_ik_reachability()` — single IK + collision check
+- [x] `check_pose_reachability()` — multi-grasp IK evaluation
+- [x] `evaluate_layout()` — per-step pipeline with dynamic obstacles
+- [x] `StepFeasibility` / `FeasibilityReport` result dataclasses
+
+**Files created:**
+- `sealp/layout/reachability.py` — IK reachability + grasp-aware pose checking
+- `sealp/layout/feasibility.py` — `evaluate_layout(layout, assembly_def, robot)`
+- `sealp/layout/manipulability.py` — Yoshikawa manipulability scoring
 
 ### 3.2 Layout Representation
 
-```python
-@dataclass
-class WorkspaceLayout:
-    robot_base_pos: np.ndarray        # [x, y, z]
-    robot_base_rotmat: np.ndarray     # 3x3
-    staging_positions: dict           # part_id → (pos, rotmat)
-    assembly_station_pos: np.ndarray  # Assembly station location
-    fixtures: list                    # Fixed obstacle positions
-```
+- [x] `WorkspaceLayout` dataclass with full YAML serialization
+- [x] `from_task_plan()` factory — extract layout from existing `TaskPlan`
+- [x] `apply_to_task_plan()` — write layout back into a `TaskPlan`
+- [x] `.layout` file format (save / load)
 
-**Files to create:**
+**Files created:**
+- `sealp/layout/__init__.py`
 - `sealp/layout/layout.py` — `WorkspaceLayout` dataclass + YAML serialization
 
 ### 3.3 Layout Optimizer
@@ -144,31 +147,50 @@ Formulate layout planning as constrained optimization:
 - **Constraints**: feasibility (IK + collision-free paths), workspace bounds, safety margins
 - **Method**: feasibility-first search → random/GA/CMA-ES refinement
 
-Approach from reference (`tiaozhanbei/task_sim`):
-- Voxelized workspace analysis (`viz_layout_voxel.py`)
-- Manipulability maps (`m-map2_refined.py`, `manipulability5.py`)
-- GA-based optimizer (`optimizer_ga.py`)
-- Random search baseline (`optimizer_random.py`)
+- [x] `LayoutOptimizer` ABC + `OptimizationResult` dataclass
+- [x] `RandomSearchOptimizer` — random search baseline with configurable bounds
+- [ ] `GeneticAlgorithmOptimizer` — GA-based optimizer
+- [ ] `constraints.py` — layout constraint definitions
+- [ ] `objectives.py` — objective function definitions
+
+**Files created:**
+- `sealp/layout/optimizer.py` — abstract optimizer interface
+- `sealp/layout/optimizer_random.py` — random search baseline
 
 **Files to create:**
-- `sealp/layout/optimizer.py` — abstract optimizer interface
 - `sealp/layout/optimizer_ga.py` — genetic algorithm optimizer
-- `sealp/layout/optimizer_random.py` — random search baseline
 - `sealp/layout/constraints.py` — layout constraint definitions
 - `sealp/layout/objectives.py` — objective function definitions
 
 ### 3.4 Evaluation & Metrics
 
-| Metric | Description |
-|--------|-------------|
-| `total_time` | Sum of motion execution times |
-| `total_path_length` | Sum of joint-space path lengths |
-| `manipulability_avg` | Average manipulability across steps |
-| `feasibility_rate` | Fraction of steps with valid plans |
-| `collision_clearance` | Minimum clearance to obstacles |
+- [x] `LayoutMetrics` dataclass with composite scoring
+- [x] `compute_metrics()` — aggregation from `FeasibilityReport`
 
-**Files to create:**
+| Metric | Description | Status |
+|--------|-------------|--------|
+| `feasibility_rate` | Fraction of steps with valid IK + collision-free | ✅ |
+| `manipulability_avg` | Average manipulability across steps | ✅ |
+| `manipulability_min` | Worst-case manipulability | ✅ |
+| `grasp_diversity` | Average collision-free grasps per step | ✅ |
+| `composite_score` | feasibility × (1 + manipulability) | ✅ |
+| `total_path_length` | Sum of joint-space path lengths | ⬜ |
+| `collision_clearance` | Minimum clearance to obstacles | ⬜ |
+
+**Files created:**
 - `sealp/layout/metrics.py` — standardized evaluation metrics
+
+### 3.5 Layout Examples & Visualization
+
+- [x] `eval_layout.py` — evaluate single layout + Panda3D 3D visualization
+- [x] `compare_layouts.py` — evaluate multiple layouts + matplotlib charts
+- [x] `optimize_layout.py` — random search end-to-end + convergence plots + 3D visualization
+
+**Files created:**
+- `sealp/examples/layout/__init__.py`
+- `sealp/examples/layout/eval_layout.py` — single layout evaluation with 3D feasibility markers
+- `sealp/examples/layout/compare_layouts.py` — headless multi-layout comparison with bar charts, heatmap, manipulability breakdown
+- `sealp/examples/layout/optimize_layout.py` — random search optimization with convergence plot, robot position heatmap, best-layout visualization
 
 ---
 
@@ -245,9 +267,9 @@ YAML config → load sequence → optimize layout → assign primitives
 | Phase | Focus | Priority | Estimated Effort |
 |-------|-------|----------|-----------------|
 | 1 | Foundation | ✅ Done | — |
-| 2 | Sequential Manipulation | 🔧 Active | 1–2 weeks |
-| 3 | Layout Optimization | ⬜ Next | 2–3 weeks |
-| 4 | Dual-Arm Coordination | ⬜ Later | 2–3 weeks |
+| 2 | Sequential Manipulation | ✅ Done | — |
+| 3 | Layout Optimization | 🔧 Active | 2–3 weeks |
+| 4 | Dual-Arm Coordination | ⬜ Next | 2–3 weeks |
 | 5 | Integration & Validation | ⬜ Final | 1–2 weeks |
 
 ---

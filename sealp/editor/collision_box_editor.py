@@ -5,7 +5,7 @@ Standalone tool for visually adjusting CollisionBox parameters on a 3D model.
 
 Usage:
     python collision_box_editor.py
-    python -m tbm_interface.gui.collision_box_editor
+    python -m sealp.editor.collision_box_editor
 
 Load an STL model file, add/remove CollisionBox primitives, tweak their
 center and half-extent parameters in real time, then generate a ready-to-paste
@@ -19,10 +19,9 @@ import sys
 import traceback
 import numpy as np
 from panda3d.core import (CollisionNode, CollisionBox, Point3,
-                           TextNode, TransparencyAttrib)
+                          TextNode, TransparencyAttrib)
 from direct.gui.DirectGui import (DirectFrame, DirectLabel, DirectButton,
-                                  DGG, DirectScrolledList)
-
+                                  DirectEntry, DGG, DirectScrolledList)
 # ---------------------------------------------------------------------------
 # Bootstrap: make sure the project root is on sys.path so imports work
 # when this file is executed directly.
@@ -32,13 +31,8 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, os.pardir, os.pardir))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import modeling.geometric_model as gm
-import basis.robot_math as rm
-
-# Try to import the project's custom DirectEntry; fall back to panda3d's
-
-from tbm_interface.gui.entry import DirectEntry
-
+import wrs.modeling.geometric_model as mgm
+import wrs.basis.robot_math as rm
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -68,9 +62,9 @@ def _make_btn(text, command, parent, pos=(0, 0, 0), scale=BTN_SCALE,
         text_fg=(1, 1, 1, 1),
         text_pos=(0, 0),
         frameColor=((0.28, 0.47, 0.78, 1),
-                     (0.85, 0.35, 0.35, 1),
-                     (0.18, 0.32, 0.58, 1),
-                     (0.5, 0.5, 0.5, 1)),
+                    (0.85, 0.35, 0.35, 1),
+                    (0.18, 0.32, 0.58, 1),
+                    (0.5, 0.5, 0.5, 1)),
         relief=DGG.FLAT,
         frameSize=frame_size,
         command=command,
@@ -81,23 +75,20 @@ def _make_btn(text, command, parent, pos=(0, 0, 0), scale=BTN_SCALE,
 
 
 class CollisionBoxEditor:
-    """Main editor class – creates a Panda3D window with editing GUI."""
+    """Main editor class — creates a Panda3D window with editing GUI."""
 
     def __init__(self):
-        import visualization.panda.world as wd
+        import wrs.visualization.panda.world as wd
         self.base = wd.World(cam_pos=[1.5, -1.5, 1.0],
-                             lookat_pos=[0.3, 0, 0.1],
-                             toggle_debug=False)
+                             lookat_pos=[0.3, 0, 0.1])
         # Frame displayed at origin for reference
-        gm.gen_frame(length=0.15).attach_to(self.base)
-
+        mgm.gen_frame(ax_length=0.15).attach_to(self.base)
         # Internal state
-        self._model_gm = None          # GeometricModel for the loaded mesh
-        self._box_data = []             # list of dicts {cx,cy,cz, hx,hy,hz}
-        self._box_visuals = []          # list of GeometricModel boxes
-        self._box_cd_np = None          # Panda3D NodePath for collision preview
-        self._selected_idx = -1         # currently selected box index
-
+        self._model_gm = None  # GeometricModel for the loaded mesh
+        self._box_data = []  # list of dicts {cx,cy,cz, hx,hy,hz}
+        self._box_visuals = []  # list of GeometricModel boxes
+        self._box_cd_np = None  # Panda3D NodePath for collision preview
+        self._selected_idx = -1  # currently selected box index
         self._build_ui()
         self.base.run()
 
@@ -106,7 +97,6 @@ class CollisionBoxEditor:
     # ==================================================================
     def _build_ui(self):
         a2d = self.base.aspect2d
-
         # --- Top bar: model path entry + Load button + status ----------
         self._top_frame = DirectFrame(
             frameSize=(-1.78, 1.78, -0.08, 0.08),
@@ -141,7 +131,7 @@ class CollisionBoxEditor:
         _make_btn("Load", self._on_load_btn, self._top_frame,
                   pos=(0.58, 0, -0.015))
         self._status_label = DirectLabel(
-            text="Ready – enter model path & click Load",
+            text="Ready — enter model path & click Load",
             text_scale=TEXT_SCALE * 0.85,
             text_fg=(0.7, 0.9, 0.7, 1),
             text_align=TextNode.ALeft,
@@ -149,7 +139,6 @@ class CollisionBoxEditor:
             pos=(0.74, 0, -0.015),
             parent=self._top_frame,
         )
-
         # --- Left panel: box list + Add/Remove -------------------------
         self._left_frame = DirectFrame(
             frameSize=(-0.32, 0.32, -0.90, 0.0),
@@ -169,7 +158,6 @@ class CollisionBoxEditor:
                   pos=(-0.14, 0, -0.12))
         _make_btn("- Remove", self._remove_box, self._left_frame,
                   pos=(0.14, 0, -0.12))
-
         self._box_buttons = []
         self._box_list_frame = DirectFrame(
             frameSize=(-0.30, 0.30, -0.70, 0.0),
@@ -177,7 +165,6 @@ class CollisionBoxEditor:
             pos=(0, 0, -0.18),
             parent=self._left_frame,
         )
-
         # --- Right panel: parameter editing ----------------------------
         self._right_frame = DirectFrame(
             frameSize=(-0.42, 0.42, -0.90, 0.0),
@@ -231,14 +218,12 @@ class CollisionBoxEditor:
             entry.enterText("0.0")
             self._param_entries[key] = entry
             acc -= TEXT_SCALE * 2.2
-
         # Apply button
         acc -= TEXT_SCALE
         _make_btn("Apply", self._apply_params, self._right_frame,
                   pos=(-0.12, 0, acc))
         _make_btn("Gen Code", self._generate_code, self._right_frame,
                   pos=(0.16, 0, acc))
-
         # radius entry (for expand_radius parameter)
         acc -= TEXT_SCALE * 3
         DirectLabel(
@@ -264,7 +249,6 @@ class CollisionBoxEditor:
             parent=self._right_frame,
         )
         self._radius_entry.enterText("0.0")
-
         # Toggle collision node preview
         acc -= TEXT_SCALE * 2.5
         _make_btn("Toggle CD Preview", self._toggle_cd_preview,
@@ -291,8 +275,8 @@ class CollisionBoxEditor:
             if self._model_gm is not None:
                 self._model_gm.remove()
                 self._model_gm = None
-            mdl = gm.GeometricModel(path)
-            mdl.set_rgba([0.6, 0.6, 0.6, 0.45])
+            mdl = mgm.GeometricModel(path)
+            mdl.rgba = [0.6, 0.6, 0.6, 0.45]
             mdl.attach_to(self.base)
             self._model_gm = mdl
             self._set_status(f"Loaded: {os.path.basename(path)}")
@@ -363,11 +347,10 @@ class CollisionBoxEditor:
         for btn in self._box_buttons:
             btn.destroy()
         self._box_buttons.clear()
-
         acc = -0.02
         for i in range(len(self._box_data)):
             clr = BOX_COLORS[i % len(BOX_COLORS)]
-            clr_indicator = f"[{'%.0f' % (clr[0]*255)},{'%.0f' % (clr[1]*255)},{'%.0f' % (clr[2]*255)}]"
+            clr_indicator = f"[{'%.0f' % (clr[0] * 255)},{'%.0f' % (clr[1] * 255)},{'%.0f' % (clr[2] * 255)}]"
             btn = DirectButton(
                 text=f"Box {i} {clr_indicator}",
                 text_scale=0.6,
@@ -427,18 +410,15 @@ class CollisionBoxEditor:
         if self._box_visuals[idx] is not None:
             self._box_visuals[idx].remove()
             self._box_visuals[idx] = None
-
         d = self._box_data[idx]
         hx, hy, hz = abs(d['hx']), abs(d['hy']), abs(d['hz'])
         if hx < 1e-6 or hy < 1e-6 or hz < 1e-6:
             return  # zero-size box, skip
-
-        extent = np.array([hx * 2, hy * 2, hz * 2])
-        homomat = np.eye(4)
-        homomat[:3, 3] = [d['cx'], d['cy'], d['cz']]
-        box_sgm = gm.gen_box(extent=extent, homomat=homomat)
-        clr = list(BOX_COLORS[idx % len(BOX_COLORS)])
-        box_sgm.set_rgba(clr)
+        xyz_lengths = np.array([hx * 2, hy * 2, hz * 2])
+        pos = np.array([d['cx'], d['cy'], d['cz']])
+        clr = BOX_COLORS[idx % len(BOX_COLORS)]
+        box_sgm = mgm.gen_box(xyz_lengths=xyz_lengths, pos=pos,
+                              rgb=np.array(clr[:3]), alpha=clr[3])
         box_sgm.attach_to(self.base)
         self._box_visuals[idx] = box_sgm
 
@@ -457,15 +437,12 @@ class CollisionBoxEditor:
         if self._box_cd_np is not None:
             self._box_cd_np.removeNode()
             self._box_cd_np = None
-
         if not self._box_data:
             return
-
         try:
             radius = float(self._radius_entry.get().strip())
         except ValueError:
             radius = 0.0
-
         cnode = CollisionNode("editor_preview")
         for d in self._box_data:
             box = CollisionBox(
@@ -475,7 +452,6 @@ class CollisionBoxEditor:
                 z=abs(d['hz']) + radius,
             )
             cnode.addSolid(box)
-
         self._box_cd_np = self.base.render.attachNewNode(cnode)
         self._box_cd_np.show()
 
@@ -490,31 +466,31 @@ class CollisionBoxEditor:
             radius_val = float(self._radius_entry.get().strip())
         except ValueError:
             radius_val = 0.0
-
         lines = [
             "    @staticmethod",
-            "    def _custom_cdprimitive_fn(name, radius):",
-            "        collision_node = CollisionNode(name)",
+            "    def _custom_cdprimitive_fn(name, ex_radius):",
+            "        pdcnd = mcm.CollisionNode(name + \"_cnode\")",
         ]
         for i, d in enumerate(self._box_data):
             cx, cy, cz = d['cx'], d['cy'], d['cz']
             hx, hy, hz = d['hx'], d['hy'], d['hz']
             lines.append(
-                f"        collision_primitive_c{i} = CollisionBox("
-                f"Point3({cx}, {cy}, {cz}),")
+                f"        collision_primitive_c{i} = mcm.CollisionBox("
+                f"mcm.Point3({cx}, {cy}, {cz}),")
             lines.append(
-                f"              {' ' * len(f'collision_primitive_c{i} = CollisionBox(')}"
-                f"x={hx} + radius, y={hy} + radius, z={hz} + radius)")
+                f"              {' ' * len(f'collision_primitive_c{i} = mcm.CollisionBox(')}"
+                f"x={hx} + ex_radius, y={hy} + ex_radius, z={hz} + ex_radius)")
             lines.append(
-                f"        collision_node.addSolid(collision_primitive_c{i})")
-        lines.append("        return collision_node")
+                f"        pdcnd.addSolid(collision_primitive_c{i})")
+        lines.append("        cdprim = mcm.NodePath(name + \"_cdprim\")")
+        lines.append("        cdprim.attachNewNode(pdcnd)")
+        lines.append("        return cdprim")
         code = "\n".join(lines)
         print("\n" + "=" * 70)
         print("Generated _cdprimitive_fn code:")
         print("=" * 70)
         print(code)
         print("=" * 70 + "\n")
-
         # Try to copy to clipboard
         try:
             import subprocess
@@ -523,7 +499,7 @@ class CollisionBoxEditor:
             process.communicate(code.encode('utf-8'))
             self._set_status("Code generated & copied to clipboard!")
         except Exception:
-            self._set_status("Code generated – see console output")
+            self._set_status("Code generated — see console output")
 
     # ==================================================================
     # Helpers

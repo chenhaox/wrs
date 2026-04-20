@@ -37,5 +37,8 @@ $env:PYTHONPATH="D:\code\layout_sq\wrs"; D:\code\venv312\.venv\Scripts\python.ex
 | Grasp visualization | `python -m sealp.examples.grasp.visualization` |
 | Single-arm PnP demo | `python -m sealp.examples.motion.pnp_demo` |
 | Dual-arm PnP demo | `python -m sealp.examples.motion.dual_arm_pnp` |
+| Layout evaluation (3D) | `python -m sealp.examples.layout.eval_layout` |
+| Layout comparison (charts) | `python -m sealp.examples.layout.compare_layouts` |
+| Layout optimization (3D) | `python -m sealp.examples.layout.optimize_layout` |
 | Config demo | `python -m sealp.config.demo_config` |
 | Assembly sequence demo | `python -m sealp.assembly_sequence.demo_sequence` |
