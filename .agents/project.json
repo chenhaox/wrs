@@ -1,0 +1,19 @@
+{
+    "project_name": "SEALP — Sequence-Aware Layout Planner",
+    "description": "Dual-arm furniture assembly: sequence-aware workspace layout optimization with the WRS framework.",
+    "python_interpreter": "D:\\code\\venv312\\.venv\\Scripts\\python.exe",
+    "pythonpath": "D:\\code\\layout_sq\\wrs",
+    "working_directory": "D:\\code\\layout_sq\\wrs",
+    "reference_projects": {
+        "tiaozhanbei": "D:\\code\\layout_sq\\layout-planning-main\\myproject\\tiaozhanbei",
+        "wrs_tbm": "D:\\code\\wrs_tbm",
+        "panda3dstudio": "D:\\code\\layout_sq\\panda3dstudio"
+    },
+    "robot_types": ["piper", "cobotta", "nova2_wg", "xarmlite6_wg"],
+    "primary_robot": "piper",
+    "key_modules": {
+        "sealp": "sealp/",
+        "wrs": "wrs/",
+        "examples": "sealp/examples/"
+    }
+}
