@@ -45,10 +45,6 @@ _LEG_PLACE_DEPART_DIST_M = 0.04
 
 # ── 候选搜索：仅作「种子」，最终位姿由预搜索给出 ─────────────────
 STAGING_SEEDS = {
-
-
-
-    
     "seat": np.array([0.30, -0.10, 0.00]),
     "leg_fl": np.array([0.25, 0.20, 0.00]),
     "leg_bl": np.array([0.40, 0.15, 0.00]),
