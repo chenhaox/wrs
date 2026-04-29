@@ -12,7 +12,7 @@ project_name: "SampleAssembly"
 # Supported types: piper, cobotta, nova2_wg, xarmlite6_wg
 # Custom types can be registered via ROBOT_REGISTRY at runtime.
 robot:
-  type: "nova2_wg"
+  type: "piper"
   pos: [0.0, 0.0, 0.0]
   rotmat: [[1,0,0],[0,1,0],[0,0,1]]
   enable_cc: true

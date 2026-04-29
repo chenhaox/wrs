@@ -141,7 +141,11 @@ world.user_obstacles.add_box("block", extent=[0.1, 0.1, 0.1],
 robot.is_collided(obstacle_list=world.obstacle_list)
 
 # Visualize
+<<<<<<< HEAD
 world.show(base, robot=robot, toggle_cdprim=False)
+=======
+world.show(base, robot=robot, toggle_cdprim=True)
+>>>>>>> 7882e69dea7651bea22d967997fe3ff716957cea
 ```
 
 ### 4. Assembly Sequence (YAML)

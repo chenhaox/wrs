@@ -10,7 +10,6 @@ from wrs.robot_sim.manipulators.piper.piper import Piper
 from wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper import PiperGripper
 import wrs.modeling.geometric_model as mgm
 
-
 class PiperSglArm(sari.SglArmRobotInterface):
     """
     Piper 机械臂整合类：基于 Piper 本体与 PiperGripper 夹爪。
