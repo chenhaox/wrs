@@ -1,224 +1,75 @@
 """
-Grasp Filtering Example
-========================
-
-Demonstrates filtering a ``GraspCollection`` by geometric criteria:
-- Gripper orientation (e.g., keep only top-down grasps)
-- Grasp position bounds (e.g., height range)
-- Jaw width range
-
-This is the second step in a typical grasp pipeline:
-    1. Plan grasps  (``grasp_planning.py``)
-    2. **Filter grasps** (this script)
-    3. Use filtered grasps in pick-and-place planning
-
-Usage::
-
-    python -m sealp.examples.grasp.filtering
-
-Adapted from tiaozhanbei/grasp/filter_grasp.py
+Grasp Filtering for YuanChair Part 1 (Seat)
+===========================================
+加载 Part 1 (Seat) 的抓取规划数据，过滤出仅保留从上往下抓（基座坐标系 Z 轴负方向）的抓取，
+并按照要求保存并覆盖为 demo_yuanchair-part2_grasps.pickle 文件。
 """
 
 import os
-from typing import Callable, List, Optional
-
+import pickle
 import numpy as np
-import wrs.basis.robot_math as rm
-import wrs.modeling.geometric_model as mgm
-import wrs.modeling.collision_model as mcm
-import wrs.visualization.panda.world as wd
-import wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper as pg
 from wrs.grasping.grasp import GraspCollection
 
 
-# ======================================================================
-# Filter functions
-# ======================================================================
-def filter_by_orientation(grasp_collection,
-                          axis_idx=2,
-                          direction="down",
-                          threshold=0.0):
-    """Keep grasps whose gripper axis points in a given direction.
+def filter_by_orientation(grasp_collection, axis_idx=2, direction="down", threshold=0.0):
+    """
+    过滤抓取姿态，仅保留夹爪控制轴指向特定方向的抓取。
 
-    Parameters
-    ----------
-    grasp_collection : GraspCollection
-        Input grasps.
-    axis_idx : int
-        Column index of ``ac_rotmat`` to check (0=x, 1=y, 2=z).
-    direction : str
-        ``"down"`` keeps grasps where the axis z-component < -threshold.
-        ``"up"`` keeps grasps where the axis z-component > threshold.
-    threshold : float
-        Cutoff value for the z-component.
-
-    Returns
-    -------
-    GraspCollection
-        Filtered grasps.
+    axis_idx=2 代表夹爪的接近轴（Z轴）。
+    ac_rotmat[2, axis_idx] 获取该轴在世界/基座坐标系 Z 轴上的分量。
+    当 direction="down" 且分量 < 0 时，说明夹爪是从上往下接近物体的。
     """
     filtered = GraspCollection()
     for grasp in grasp_collection:
         z_component = grasp.ac_rotmat[2, axis_idx]
         if direction == "down" and z_component < -threshold:
             filtered.append(grasp)
-        elif direction == "up" and z_component > threshold:
-            filtered.append(grasp)
     return filtered
 
 
-def filter_by_position(grasp_collection,
-                       x_range=None,
-                       y_range=None,
-                       z_range=None):
-    """Keep grasps whose ``ac_pos`` falls within specified coordinate ranges.
-
-    Parameters
-    ----------
-    grasp_collection : GraspCollection
-    x_range, y_range, z_range : tuple of (min, max) or None
-        If None, no filtering on that axis.
-
-    Returns
-    -------
-    GraspCollection
-    """
-    filtered = GraspCollection()
-    for grasp in grasp_collection:
-        p = grasp.ac_pos
-        if x_range is not None and not (x_range[0] <= p[0] <= x_range[1]):
-            continue
-        if y_range is not None and not (y_range[0] <= p[1] <= y_range[1]):
-            continue
-        if z_range is not None and not (z_range[0] <= p[2] <= z_range[1]):
-            continue
-        filtered.append(grasp)
-    return filtered
-
-
-def filter_by_jaw_width(grasp_collection,
-                        min_width=None,
-                        max_width=None):
-    """Keep grasps within a jaw-width range.
-
-    Parameters
-    ----------
-    grasp_collection : GraspCollection
-    min_width, max_width : float or None
-
-    Returns
-    -------
-    GraspCollection
-    """
-    filtered = GraspCollection()
-    for grasp in grasp_collection:
-        w = grasp.ee_values
-        if min_width is not None and w < min_width:
-            continue
-        if max_width is not None and w > max_width:
-            continue
-        filtered.append(grasp)
-    return filtered
-
-
-def filter_custom(grasp_collection, predicate: Callable):
-    """Keep grasps that satisfy an arbitrary predicate function.
-
-    Parameters
-    ----------
-    grasp_collection : GraspCollection
-    predicate : callable
-        ``predicate(grasp) -> bool``.  Returns True to keep.
-
-    Returns
-    -------
-    GraspCollection
-    """
-    filtered = GraspCollection()
-    for grasp in grasp_collection:
-        if predicate(grasp):
-            filtered.append(grasp)
-    return filtered
-
-
-# ======================================================================
-# Demo
-# ======================================================================
 def main():
-    """Run the grasp filtering demo."""
-    from sealp.examples.grasp.planning import plan_grasps, visualize_grasps
+    # 1. 确定输入输出路径
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(current_dir, "_output")
 
-    # ------------------------------------------------------------------
-    # 1. Setup
-    # ------------------------------------------------------------------
-    base = wd.World(cam_pos=rm.vec(.5, .5, .5), lookat_pos=rm.vec(0, 0, 0))
-    mgm.gen_frame(ax_length=0.3).attach_to(base)
+    # 输入：yuanchair-part1.stl 对应的原抓取文件
+    input_path = os.path.join(out_dir, "demo_yuanchair-part1_grasps.pickle")
+    # 输出：用户指定保存并覆盖的目标文件 (part2)
+    output_path = os.path.join(out_dir, "demo_yuanchair-part2_grasps.pickle")
 
-    # ------------------------------------------------------------------
-    # 2. Create object and plan grasps (or load from disk)
-    # ------------------------------------------------------------------
-    obj_cmodel = mcm.CollisionModel(r"D:\Project\wrs-sealp\sealp\assets\models\yuanchair\yuanchair-part2.stl")
-    obj_cmodel.rgba = np.array([0.6, 0.5, 0.4, 1.0])
+    # 2. 检查输入文件是否存在
+    if not os.path.exists(input_path):
+        print(f"\n[ERROR] 找不到 Part 1 的抓取规划文件: {input_path}")
+        print("请确保已经运行过 planning.py 生成了基础抓取数据。")
+        return
 
-    out_dir = os.path.join(os.path.dirname(__file__), "_output")
-    pickle_path = os.path.join(out_dir, "demo_yuanchair-part2_grasps.pickle")
+    # 3. 加载抓取数据
+    print(f"\n[INFO] 正在读取原椅座(Part 1)抓取数据: {os.path.relpath(input_path)}")
+    with open(input_path, 'rb') as f:
+        grasp_collection = pickle.load(f)
+    print(f"成功加载，原始抓取总数: {len(grasp_collection)}")
 
-    if os.path.isfile(pickle_path):
-        print(f"Loading grasps from {pickle_path}...")
-        grasp_collection = GraspCollection.load_from_disk(
-            file_name=pickle_path)
-        gripper = pg.PiperGripper()
-    else:
-        print("Planning grasps (no cached file found)...")
-        grasp_collection, gripper = plan_grasps(obj_cmodel, max_samples=50)
-        os.makedirs(out_dir, exist_ok=True)
-        grasp_collection.save_to_disk(file_name=pickle_path)
+    # 4. 执行定向过滤（从上往下抓）
+    print("\n[INFO] 正在执行方向过滤（只保留基座坐标系 Z 轴负方向 / 从上往下抓）...")
+    filtered_collection = filter_by_orientation(
+        grasp_collection,
+        axis_idx=2,       # 检查夹爪的接近轴(Z轴)
+        direction="down", # 方向朝下
+        threshold=0.0     # 严格小于0
+    )
+    print(f"过滤完成，符合要求的朝下抓取总数: {len(filtered_collection)}")
 
-    print(f"Total grasps: {len(grasp_collection)}")
+    if len(filtered_collection) == 0:
+        print("[WARN] 过滤后的抓取数量为 0，请检查原始数据或放宽阈值。")
+        return
 
-    # ------------------------------------------------------------------
-    # 3. Apply filters
-    # ------------------------------------------------------------------
-    # Keep only top-down grasps (gripper z-axis points down)
-    filtered = filter_by_orientation(grasp_collection, axis_idx=2,
-                                     direction="down", threshold=0.0)
-    print(f"After orientation filter (z-down): {len(filtered)}")
-
-    # Keep grasps within a height range
-    filtered = filter_by_position(filtered, z_range=(0.2, 0.5))
-    print(f"After position filter (z in [0.005, 0.05]): {len(filtered)}")
-
-    # ------------------------------------------------------------------
-    # 4. Save filtered grasps
-    # ------------------------------------------------------------------
-    filtered_path = os.path.join(out_dir, "demo_yuanchair-part2_filter_grasps.pickle")
-    filtered.save_to_disk(file_name=filtered_path)
-    print(f"Saved {len(filtered)} filtered grasps to {filtered_path}")
-
-    # ------------------------------------------------------------------
-    # 5. Visualize filtered grasps (green) on top of original (red faint)
-    # ------------------------------------------------------------------
-    obj_cmodel.attach_to(base)
-
-    # Original grasps — faint red
-    for i, grasp in enumerate(grasp_collection):
-        if i >= 20:
-            break
-        gripper.grip_at_by_pose(grasp.ac_pos, grasp.ac_rotmat,
-                                grasp.ee_values)
-        gripper.gen_meshmodel(alpha=0.15).attach_to(base)
-
-    # Filtered grasps — solid
-    for i, grasp in enumerate(filtered):
-        if i >= 20:
-            break
-        gripper.grip_at_by_pose(grasp.ac_pos, grasp.ac_rotmat,
-                                grasp.ee_values)
-        gripper.gen_meshmodel(alpha=0.8).attach_to(base)
-
-    print(f"\nShowing original (faint) vs filtered (solid).")
-    print("Press ESC to close.")
-    base.run()
+    # 5. 保存并覆盖目标文件
+    print(f"\n[INFO] 正在写入并覆盖目标文件: {os.path.relpath(output_path)}")
+    filtered_collection.save_to_disk(file_name=output_path)
+    print("=" * 50)
+    print("[OK] 任务成功完成！")
+    print(f"已成功将 Part 1 过滤后的朝下抓取覆盖至 Part 2 缓存中。")
+    print("=" * 50)
 
 
 if __name__ == "__main__":

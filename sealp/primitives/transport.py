@@ -121,6 +121,10 @@ class TransportPrimitive(MotionPrimitive):
         pa_dir = kwargs.get("place_approach_direction_list")
         if pa_dir is not None:
             gpp_kwargs["place_approach_direction_list"] = pa_dir
+        # 透传"宽松度"相关参数到 PickPlacePlanner
+        for _key in ("linear_granularity", "reason_grasps"):
+            if _key in kwargs and kwargs[_key] is not None:
+                gpp_kwargs[_key] = kwargs[_key]
         mot_data = self._planner.gen_pick_and_place(**gpp_kwargs)
 
         if mot_data is None:

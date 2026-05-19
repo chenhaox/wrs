@@ -47,24 +47,38 @@ class PiperSglArm(sari.SglArmRobotInterface):
             self.setup_cc()
 
     def setup_cc(self):
-        """设置自碰撞检测，参考 RealmanR"""
+        """设置自碰撞 + 对外障碍碰撞检测，参考 RealmanR / xarm7_dual。
+
+        WRS 的 cc 走 panda3d bitmask 通路，必须**显式**给连杆打上
+        ``bitmask_ext "from"``，``robot.is_collided(obstacle_list=...)`` 对
+        外部障碍才会真正触发；CollisionModel 的 cdprim 默认带 ext "into"，
+        但 CCE 创建时 ``clear_mask=True`` 把链节这边的 mask 全清了，所以
+        不补这一行的话 **任何障碍物都检测不到**（包括桌沿、staging 零件、
+        装配 ghost）。
+        """
         mlb = self.cc.add_cce(self.manipulator.jlc.anchor.lnk_list[0])
         ml0 = self.cc.add_cce(self.manipulator.jlc.jnts[0].lnk)
         ml1 = self.cc.add_cce(self.manipulator.jlc.jnts[1].lnk)
         ml2 = self.cc.add_cce(self.manipulator.jlc.jnts[2].lnk)
         ml3 = self.cc.add_cce(self.manipulator.jlc.jnts[3].lnk)
         ml4 = self.cc.add_cce(self.manipulator.jlc.jnts[4].lnk)
-        # ml7 = self.cc.add_cce(self.end_effector.jlc.)
         mlee = self.cc.add_cce(self.end_effector.jlc.anchor.lnk_list[0])
         el0 = self.cc.add_cce(self.end_effector.jlc.jnts[0].lnk)
         el1 = self.cc.add_cce(self.end_effector.jlc.jnts[1].lnk)
 
+        # —— 自碰：腕 + 末端 ↔ 肩
         from_list = [ml4, mlee, el0, el1]
         into_list = [ml0, ml1]
         self.cc.set_cdpair_by_ids(from_list, into_list)
-        # from_list = [ml4]
-        # into_list = [mlee, el0, el1]
-        # self.cc.set_cdpair_by_ids(from_list, into_list)
+
+        # —— 对外障碍：所有"会动"的连杆都要打上 ext "from"
+        self.cc.enable_extcd_by_id_list(
+            id_list=[ml1, ml2, ml3, ml4, mlee, el0, el1], type="from")
+        # —— 在手物体（robot.hold 时打 inner "from"）撞自家上臂的检测端
+        self.cc.enable_innercd_by_id_list(
+            id_list=[mlb, ml0, ml1], type="into")
+        self.cc.dynamic_into_list = [mlb, ml0, ml1]
+        self.cc.dynamic_ext_list = []
 
     def fk(self, jnt_values, toggle_jacobian=False, update=False):
         """前向运动学"""

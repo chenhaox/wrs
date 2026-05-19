@@ -305,8 +305,13 @@ class SequenceExecutor:
                             cdprim_type=placed.cdprim_type,
                             ex_radius=self._assembled_cd_ex_radius,
                         )
-                    except Exception:
-                        pass
+                    except Exception as _err:
+                        # 不再静默吞异常 —— 让上层看到 cdprim 重建失败的真实
+                        # 原因。即使失败，placed 仍以原始 cdprim 加入 obs_list，
+                        # 不阻塞执行，但避障会比预期严格不足。
+                        print(f"  [WARN] {step.part_id} change_cdprim_type "
+                              f"(ex_radius={self._assembled_cd_ex_radius}) "
+                              f"failed: {_err!r}")
                 placed._sealp_role = "assembled_at_goal"
                 placed._sealp_part_id = step.part_id
                 obs_list.append(placed)
@@ -498,7 +503,7 @@ class SequenceExecutor:
                 with open(file_path, 'rb') as f:
                     grasps = pickle.load(f)
                     self._grasp_cache[model_alias] = grasps
-                    print(f"  ✅ 成功加载 {len(grasps)} 个姿态！")
+                    print(f"成功加载 {len(grasps)} 个姿态！")
                     return grasps
             else:
                 print(f"  [底层警告] 指定的路径不存在或文件为空: {file_path}")

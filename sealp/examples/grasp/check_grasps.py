@@ -11,13 +11,12 @@ import wrs.basis.robot_math as rm
 import wrs.modeling.geometric_model as mgm
 import wrs.modeling.collision_model as mcm
 import wrs.visualization.panda.world as wd
-import wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper as pg
-import wrs.robot_sim.end_effectors.grippers.wrs_gripper.wrs_gripper_v3 as wg3
+import wrs.robot_sim.end_effectors.grippers.panthera_gripper.panthera_gripper as pg
 
 def main():
     # 1. Define data and model paths
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    pickle_path = os.path.join(current_dir, "_output", "demo_yuanchair-part1_wrs_grasps.pickle")
+    pickle_path = os.path.join(current_dir, "_output", "demo_yuanchair-part1_grasps.pickle")
 
     # Ensure this path matches the object model used in planning.py
     obj_path = r"D:\Project\wrs-sealp\sealp\assets\models\yuanchair\yuanchair-part1.stl"
@@ -55,10 +54,8 @@ def main():
         obj_cmodel.rgba = np.array([0.6, 0.5, 0.4, 1.0])
         obj_cmodel.attach_to(base)
 
-    # Initialize gripper and render grasp poses
-    # gripper = pg.PiperGripper()
-    gripper = wg3.WRSGripper3()
-    max_show = 30  # Limit the number of rendered grasps to maintain frame rate
+    gripper = pg.PantheraGripper()
+    max_show = 300
 
     print("\n" + "=" * 60)
     print(f"[INFO] Displaying detailed kinematic data for the top {min(max_show, len(grasp_collection))} grasps:")

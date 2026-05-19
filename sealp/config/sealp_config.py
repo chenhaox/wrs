@@ -31,7 +31,7 @@ YAML Format
     project_name: "FurnitureAssembly_v1"
 
     robot:
-      type: "piper"
+      type: "panthera_ht"   # piper / cobotta / nova2_wg / xarmlite6_wg / panthera_ht
       pos: [0, 0, 0]
       rotmat: [[1,0,0],[0,1,0],[0,0,1]]
       enable_cc: true
@@ -95,11 +95,19 @@ def _make_xarmlite6_wg(pos, rotmat, name, enable_cc):
                        enable_cc=enable_cc)
 
 
+def _make_panthera_ht(pos, rotmat, name, enable_cc):
+    """Factory for PantheraHTSglArm (Panthera-HT 6-DoF + Panthera 双指夹爪)."""
+    from wrs.robot_sim.robots.robot_panthera_ht.panthera_ht import PantheraHTSglArm
+    return PantheraHTSglArm(pos=pos, rotmat=rotmat, name=name,
+                            enable_cc=enable_cc)
+
+
 ROBOT_REGISTRY: Dict[str, Callable] = {
     "piper": _make_piper,
     "cobotta": _make_cobotta,
     "nova2_wg": _make_nova2_wg,
     "xarmlite6_wg": _make_xarmlite6_wg,
+    "panthera_ht": _make_panthera_ht,
 }
 """Registry of known robot types.
 

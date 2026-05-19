@@ -34,7 +34,7 @@ def generate() -> AssemblyDef:
     # ── Parts ────────────────────────────────────────────────
     asm.add_part(PartDef(
         part_id="seat", name="Seat",
-        model="seat_model", mass=1.5,
+        model="seat_model", mass=1.5,  # 单臂搬运（fixture 偏侧导致 dual-arm goal 不可达）
     ))
     for pid, name in [
         ("leg_fl", "Front-Left Leg"),
@@ -68,19 +68,23 @@ def generate() -> AssemblyDef:
     # From pick_and_place_chair.py, goal positions are absolute.
     # Seat is at [0.30, 0, 0].
     # Relative to seat: leg_pos_rel = leg_pos_abs - seat_pos
+    #
+    # 装配顺序（双臂演示场景下经实验确定）：
+    #   seat → leg_bl → leg_br → leg_fl → leg_fr
+    # 旧顺序 (fl→fr→bl→br) 的瓶颈：装 bl/br 时前腿已立在 chair 上，
+    # 远端 (x≈0.41) 工作空间被前腿挤占，长桌腿 mesh 搬过去时 RRT/IK
+    # 解空间被压得很薄。改为「先后腿、后前腿」：装后腿时 chair 上只
+    # 有 seat（远端空旷），装前腿时虽然后腿已立起，但前腿组装位
+    # (x≈0.19) 在近端，机械臂走"侧弧"避开后腿余量大。
     seat_pos = np.array([0.30, 0.0, 0.0])
-    goal_abs = [
-        np.array([0.19, 0.11, 0.02]),    # leg_fl
-        np.array([0.19, -0.11, 0.02]),    # leg_fr
-        np.array([0.41, -0.11, 0.02]),    # leg_bl
-        np.array([0.41, 0.11, 0.02]),     # leg_br
+    leg_specs = [
+        ("leg_bl", "Back-Left Leg",   np.array([0.41, -0.11, 0.02])),
+        ("leg_br", "Back-Right Leg",  np.array([0.41,  0.11, 0.02])),
+        ("leg_fl", "Front-Left Leg",  np.array([0.19,  0.11, 0.02])),
+        ("leg_fr", "Front-Right Leg", np.array([0.19, -0.11, 0.02])),
     ]
-    leg_ids = ["leg_fl", "leg_fr", "leg_bl", "leg_br"]
-    leg_names = ["Front-Left Leg", "Front-Right Leg",
-                 "Back-Left Leg", "Back-Right Leg"]
-
-    for i, (pid, name) in enumerate(zip(leg_ids, leg_names)):
-        rel_pos = goal_abs[i] - seat_pos  # relative to seat
+    for i, (pid, name, goal_abs) in enumerate(leg_specs):
+        rel_pos = goal_abs - seat_pos  # relative to seat
         asm.add_step(StepDef(
             step_id=i + 1,
             part_id=pid,

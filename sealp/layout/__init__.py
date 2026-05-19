@@ -26,3 +26,9 @@ optimizer_random
 from .layout import WorkspaceLayout
 from .feasibility import FeasibilityReport, StepFeasibility, evaluate_layout
 from .metrics import LayoutMetrics, compute_metrics
+from .dual_staging_search import (
+    search_dual_feasible_layout,
+    generate_staging_candidates,
+    make_grid_zone_from_box,
+    find_obstacle_def,
+)

@@ -214,6 +214,20 @@ class Piper(mi.ManipulatorInterface):
         else:
             self._ik_solver = None
 
+        # ── TracIK 抗抽风：多 seed 重试配置（默认关闭）───────
+        # TracIK 内部用随机种子做 SQP/Newton 迭代，timeout 内只抽一次，
+        # 临近关节限位的目标偶尔 return None。下面提供"显式启用"的
+        # 多 seed 重试机制：``ik()`` 主调用失败时按 home_conf -> N 个
+        # 随机 seed 多试几次，任一成功即返回。
+        #
+        # 默认 ``_ik_retry_n = 0`` —— 行为与原代码完全一致，避免给
+        # ``reason_common_gids`` 这类批量 IK 调用引入 5-10x 失败延迟。
+        # 调用方（如 fast_layout_search）想要抗抽风时显式设置：
+        #     arm._ik_retry_n = 4
+        # 失败成本 ≈ retry_n * timeout（仅当 trac_ik 主调用 None 时）。
+        self._ik_retry_n = 0
+        self._ik_rng = np.random.default_rng(0)
+
         # Set up collision checking (self‑collision) if requested
         if self.cc is not None:
             self.setup_cc()
@@ -261,8 +275,34 @@ class Piper(mi.ManipulatorInterface):
                 self.jlc.anchor.pos, self.jlc.anchor.rotmat))
             tgt_homomat = anchor_inv_homomat.dot(rm.homomat_from_posrot(tgt_pos, tgt_rotmat))
             tgt_pos, tgt_rotmat = tgt_homomat[:3, 3], tgt_homomat[:3, :3]
-            seed_jnt_values = self.home_conf if seed_jnt_values is None else seed_jnt_values.copy()
-            return self._ik_solver.ik(tgt_pos, tgt_rotmat, seed_jnt_values=seed_jnt_values)
+            # —— 主调用：用调用方传的 seed（或 home_conf）—————————
+            primary_seed = (self.home_conf if seed_jnt_values is None
+                            else np.asarray(seed_jnt_values).copy())
+            result = self._ik_solver.ik(tgt_pos, tgt_rotmat,
+                                         seed_jnt_values=primary_seed)
+            if result is not None:
+                return result
+            # —— 抽风兜底：仅当显式启用 (_ik_retry_n > 0) 时多 seed 重试 ──
+            # 顺序：home_conf（若主 seed 不是它）→ N 个随机关节值
+            # 任一成功立即返回；全部失败仍 return None（与原行为兼容）。
+            retry_n = int(getattr(self, "_ik_retry_n", 0))
+            if retry_n <= 0:
+                return None
+            tried_home = bool(np.allclose(primary_seed, self.home_conf))
+            if not tried_home:
+                result = self._ik_solver.ik(
+                    tgt_pos, tgt_rotmat,
+                    seed_jnt_values=self.home_conf.copy())
+                if result is not None:
+                    return result
+            jr = self.jnt_ranges
+            for _ in range(retry_n):
+                rand_seed = self._ik_rng.uniform(jr[:, 0], jr[:, 1])
+                result = self._ik_solver.ik(
+                    tgt_pos, tgt_rotmat, seed_jnt_values=rand_seed)
+                if result is not None:
+                    return result
+            return None
         else:
             # fall back to numerical IK provided by the JLC
             return self.jlc.ik(tgt_pos=tgt_pos,
