@@ -127,7 +127,7 @@ staging:
   top_cross:
     pos:
     - 0.414574
-    - 0.171337
+    - -0.771337
     - 0.003
     rotmat:
     - - !!float '1'
