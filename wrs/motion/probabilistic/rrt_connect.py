@@ -53,6 +53,8 @@ class RRTConnect(rrt.RRT):
              goal_conf,
              obstacle_list=[],
              other_robot_list=[],
+             start_obstacle_list=None,
+             goal_obstacle_list=None,
              ext_dist=.2,
              max_n_iter=10000,
              max_time=15.0,
@@ -64,15 +66,17 @@ class RRTConnect(rrt.RRT):
         self.roadmap_goal.clear()
         self.start_conf = start_conf
         self.goal_conf = goal_conf
+        start_obs = obstacle_list if start_obstacle_list is None else start_obstacle_list
+        goal_obs = obstacle_list if goal_obstacle_list is None else goal_obstacle_list
         # check start and goal
         if toggle_dbg:
             print("RRT: Checking start robot configuration...")
-        if self._is_collided(start_conf, obstacle_list, other_robot_list, toggle_dbg=toggle_dbg):
+        if self._is_collided(start_conf, start_obs, other_robot_list, toggle_dbg=toggle_dbg):
             print("RRT: The start robot configuration is in collision!")
             return None
         if toggle_dbg:
             print("RRT: Checking goal robot configuration...")
-        if self._is_collided(goal_conf, obstacle_list, other_robot_list, toggle_dbg=toggle_dbg):
+        if self._is_collided(goal_conf, goal_obs, other_robot_list, toggle_dbg=toggle_dbg):
             print("RRT: The goal robot configuration is in collision!")
             return None
         if self._is_goal_reached(conf=start_conf, goal_conf=goal_conf, threshold=ext_dist):

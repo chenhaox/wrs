@@ -55,7 +55,7 @@ assembly:
   parent: seat
   rel_pos:
   - 0.11
-  - -0.11
+  - 0.11
   - 0.02
   rel_rotmat:
   - - !!float '1'
@@ -75,7 +75,7 @@ assembly:
   parent: seat
   rel_pos:
   - 0.11
-  - 0.11
+  - -0.11
   - 0.02
   rel_rotmat:
   - - !!float '1'

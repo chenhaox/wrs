@@ -16,10 +16,10 @@ import wrs.robot_sim.end_effectors.grippers.panthera_gripper.panthera_gripper as
 def main():
     # 1. Define data and model paths
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    pickle_path = os.path.join(current_dir, "_output", "demo_yuanchair-part1_grasps.pickle")
+    pickle_path = os.path.join(current_dir,"tower_grasp", "tower_middle_plate_grasps.pickle")
 
     # Ensure this path matches the object model used in planning.py
-    obj_path = r"D:\Project\wrs-sealp\sealp\assets\models\yuanchair\yuanchair-part1.stl"
+    obj_path = r"D:\Project\wrs-sealp\sealp\assets\models\Toy\model\middle_plate.stl"
 
     # 2. Check if the Pickle file exists
     if not os.path.exists(pickle_path):
@@ -56,6 +56,7 @@ def main():
 
     gripper = pg.PantheraGripper()
     max_show = 300
+
 
     print("\n" + "=" * 60)
     print(f"[INFO] Displaying detailed kinematic data for the top {min(max_show, len(grasp_collection))} grasps:")

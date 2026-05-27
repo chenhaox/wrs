@@ -291,7 +291,11 @@ class RRT(object):
                                                   n_iter=smoothing_n_iter,
                                                   animation=animation)
                 mot_data = motd.MotionData(self.robot)
-                if getattr(base, "toggle_mesh", True):
+                try:
+                    toggle_mesh = base.toggle_mesh
+                except NameError:
+                    toggle_mesh = False
+                if toggle_mesh:
                     mot_data.extend(jv_list=smoothed_path)
                 else:
                     mot_data.extend(jv_list=smoothed_path, mesh_list=[])

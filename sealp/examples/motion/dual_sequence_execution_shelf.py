@@ -1,5 +1,5 @@
 """
-Dual-Arm Sequence Execution Demo — YuanChair Assembly
+Dual-Arm Sequence Execution Demo — Shelf Unit Assembly
 ======================================================
 
 1. 初始 staging **不定死**：候选网格联合搜索；5 件 staging 两两不相交；桌面初始位不得
@@ -13,9 +13,18 @@ Dual-Arm Sequence Execution Demo — YuanChair Assembly
 
 Usage::
 
-    python -m sealp.examples.motion.dual_sequence_execution
+    # 完整 4 件
+    python -m sealp.examples.motion.dual_sequence_execution_shelf
+
+    # 跳过顶层板（与 find_optimal_layout_shelf --skip-parts shelf_t 配套）
+    python -m sealp.examples.motion.dual_sequence_execution_shelf --skip-parts shelf_t
+
+    # 指定 layout 文件
+    python -m sealp.examples.motion.dual_sequence_execution_shelf \\
+        --layout sealp/examples/layout/_output/dual_shelf_unit_optimal_searched_skip_shelf_t.layout
 """
 
+import argparse
 import os
 import pickle
 import sys
@@ -37,22 +46,19 @@ from wrs.manipulation.pick_place import PickPlacePlanner
 from wrs.motion.motion_data import MotionData
 
 import wrs.robot_sim.robots.robot_panthera_ht.panthera_ht_dual_arm as pda
+from sealp.examples.layout._tasks import shelf_motion as sm
+from sealp.examples.layout._tasks.shelf_geometry import (
+    FIXTURE_POS,
+    STAGING_SEEDS,
+    default_seed_staging_pose,
+)
+from sealp.examples.layout._tasks.shelf_unit import staging_rotmat_candidates
 
 # ─────────────────────────────────────────────────────────────
-#  Pick / Place 各阶段方向常量
+#  Pick / Place 各阶段方向常量（YuanChair 遗留命名，Shelf 请用 shelf_motion）
 # ─────────────────────────────────────────────────────────────
-#  一次完整 transport 的几何流：
-#    1) pick_approach    : 直线接近抓取点（distance=0 → 等价于「不做接近」）
-#    2) pick_depart      : 抓到物体后沿 +Z 抬升 (≈ 20 cm)
-#    3) RRT moveto       : 自由空间运动到 goal 上方
-#    4) place_approach   : 沿 −Z 直线下放到装配位 (≈ 10 cm)
-#    5) place_depart     : 装好后撤离（部件相关：leg=−X, seat=+Z）
-# ─────────────────────────────────────────────────────────────
-_APPROACH_LINEAR_DIR = -rm.const.x_ax        # 兼容字段（pick approach 距离=0 后无意义）
-_PICK_DEPART_DIR = rm.const.z_ax             # 抓后 +Z 抬升
-_PLACE_APPROACH_DIR = -rm.const.z_ax         # 装配前 +Z → −Z 下放
-_LEG_PLACE_DEPART_DIR = -rm.const.x_ax       # 腿装好后沿 −X 撤离
-_SEAT_PLACE_DEPART_DIR = rm.const.z_ax       # 座板装好后沿 +Z 撤离
+_APPROACH_LINEAR_DIR = -rm.const.x_ax        # pick approach 距离=0 后无意义
+# ShelfUnit 专用方向见 ``sealp.examples.layout._tasks.shelf_motion``
 
 # ─────────────────────────────────────────────────────────────
 #  Pick / Place 运动规划「宽松度」参数（统一在此调节）
@@ -63,47 +69,38 @@ _SEAT_PLACE_DEPART_DIR = rm.const.z_ax       # 座板装好后沿 +Z 撤离
 #    * cd_ex_radius 更小 → 已装件 CD 膨胀更小，避障更宽松
 #  注意：approach 距离过大可能让直线段端点 IK 不可达，这里取的是经验上限。
 # ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+#  Pick / Place 运动规划「宽松度」参数（统一在此调节）
+# ─────────────────────────────────────────────────────────────
 RELAXED_PLANNING = {
     # —— StepParams 默认 (gen_pick_and_place 的 pick_approach / 默认 depart) ——
-    "step_approach_distance":      0,   # m
-    "step_depart_distance":        0.05,   # m
+    "step_approach_distance":      0,      # m (保持 0)
+    "step_depart_distance":        0.02,   # m (已修改为 0.02)
 
     # —— 抓取后抬升 (pick_depart_distance) ——
-    "pick_depart_distance":        0.06,   # m，左右臂统一
+    "pick_depart_distance":        0.02,   # m，左右臂统一 (已修改为 0.02)
 
-    # —— 装配前直线接近 (place_approach_distance_list) —— 用户要求 10 cm，沿 −Z
-    "place_approach_distance":     0.05,   # m
+    # —— 装配前直线接近 (place_approach_distance_list) ——
+    "place_approach_distance":     0.02,   # m，缩短接近段，降低 IK 压力 (已修改为 0.02)
 
     # —— 部件相关的 place_depart_distance ——
-    "leg_place_depart_distance":   0.05,   # m
-    "seat_place_depart_distance":  0.06,   # m
+    "leg_place_depart_distance":   0.02,   # m (已修改为 0.02)
+    "seat_place_depart_distance":  0.02,   # m (已修改为 0.02)
 
     # —— 透传给 PickPlacePlanner 的内部宽松度 ——
     "linear_granularity":          0.04,   # m，直线段插值步长（越大越稀疏）
 
     # —— SequenceExecutor 已装件 CD 膨胀 ——
-    #   说明: 立起来的 leg 是细长杆，AABB cdprim 比 mesh 大不了多少 (杆直
-    #   径 ~2cm)，仅 5mm padding 时 RRT 经常找出"擦边"路径——cdprim 看不到
-    #   碰，mesh 复验报 robot_vs_obstacle (命中='leg_fl')。15mm 是经验值：
-    #   足够把 leg AABB 膨胀到杆周围 ~3cm 缓冲带，让 RRT 看到"路障"主动
-    #   绕远；又不至于覆盖到相邻 leg goal pose（座面下相邻两腿水平间距
-    #   一般 >5cm）。如再调大注意验证 leg_bl/leg_br goal 处 IK 仍可解。
     "assembled_cd_ex_radius":      0.015,  # m，越小越宽松
 
     # —— 关节空间复验密度 (_motion_replay_collision_free) ——
-    #   注意：RRT 可以稀疏以提速，但最终复验必须严格。这里保持较密，
-    #   保证机器人本体、夹爪、被抓物体都不会穿过桌面/其他零件。
     "replay_granularity":          0.03,   # rad，越小越严格
 
     # —— RRT 全局稀疏化（monkey-patch wrs.RRTConnect.plan）——
-    #   ADPlanner.gen_approach 把 ext_dist=0.1 写死了 4 处（比 RRT 默认 0.2
-    #   还密），从外层无法覆盖，只能 patch RRTConnect.plan 强制改写。
-    #   下面三个值越"大/小/小"越稀疏越快越粗：
     "rrt_ext_dist":                0.30,   # rad，扩展步长（默认 0.1，越大越稀疏）
-    "rrt_smoothing_n_iter":        150,     # 平滑迭代数（默认 500，越小越快）
+    "rrt_smoothing_n_iter":        150,    # 平滑迭代数（默认 500，越小越快）
     "rrt_max_time":                10.0,   # 秒，单次 RRT 最长耗时
 }
-
 
 def _patch_rrt_for_relaxed_sampling():
     """全局 monkey-patch ``RRTConnect.plan``：强制覆盖 ``ext_dist`` /
@@ -133,16 +130,8 @@ def _patch_rrt_for_relaxed_sampling():
 
 _patch_rrt_for_relaxed_sampling()
 
-# ── 候选搜索：仅作「种子」，最终位姿由预搜索给出 ─────────────────
-STAGING_SEEDS = {
-    "seat": np.array([0.30, -0.10, 0.00]),
-    "leg_fl": np.array([0.25, 0.20, 0.00]),
-    "leg_bl": np.array([0.40, 0.15, 0.00]),
-    # Panthera-HT 右臂 base 在 (0, -0.62)；leg 立杆 cdprim 必须离 base
-    # 至少 ~0.20m 否则 home 姿态下被判穿模。
-    "leg_fr": np.array([0.25, -0.85, 0.00]),
-    "leg_br": np.array([0.40, -0.85, 0.00]),
-}
+# ── 候选搜索：仅作「种子」，最终位姿由预搜索 / .layout 给出 ─────────
+# 与 shelf_geometry.STAGING_SEEDS 同步（xy；z 由 layout 内 rotmat+z_offset 决定）
 
 # ── 黄金 staging（已实测可让 5/5 step 全部通过 RRT/IK） ────────────
 # DFS 预搜索内部依赖 trac_ik 的 stochastic IK，多次跑会产出不同的
@@ -238,7 +227,46 @@ def _make_table_aware_staging_zones():
 
 STAGING_ZONES = _make_table_aware_staging_zones()
 
-INITIAL_STAGING_PART_IDS = ("seat", "leg_bl", "leg_br", "leg_fl", "leg_fr")
+INITIAL_STAGING_PART_IDS = ("side_l", "shelf_m", "shelf_t", "side_r")
+_EXPECTED_ASM_ORDER = INITIAL_STAGING_PART_IDS
+
+
+def _parse_skip_parts(raw: str) -> tuple[str, ...]:
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def _filter_asm_for_skip_parts(asm: AssemblyDef, skip_parts: tuple[str, ...]) -> tuple[str, ...]:
+    """从 asmdef 移除 skip 零件的装配步，并修正剩余步的 deps。"""
+    skip_set = frozenset(skip_parts)
+    unknown = skip_set - set(INITIAL_STAGING_PART_IDS)
+    if unknown:
+        raise ValueError(
+            f"未知 skip_parts: {sorted(unknown)}；"
+            f"可选: {list(INITIAL_STAGING_PART_IDS)}")
+    if not skip_set:
+        return tuple(s.part_id for s in asm.get_execution_order())
+
+    kept = [s for s in asm._steps if s.part_id not in skip_set]
+    if not kept:
+        raise ValueError(f"skip_parts={skip_parts!r} 后无剩余装配步骤")
+    kept_step_ids = {s.step_id for s in kept}
+    for s in kept:
+        s.deps = [d for d in s.deps if d in kept_step_ids]
+    asm._steps = kept
+    return tuple(s.part_id for s in asm.get_execution_order())
+
+
+def _default_searched_layout_path(skip_parts: tuple[str, ...]) -> str:
+    out_dir = os.path.join(
+        os.path.dirname(__file__), "..", "layout", "_output")
+    base = "dual_shelf_unit_optimal_searched"
+    if skip_parts:
+        suffix = "_skip_" + "_".join(sorted(skip_parts))
+        name = f"{base}{suffix}.layout"
+    else:
+        name = f"{base}.layout"
+    return os.path.abspath(os.path.join(out_dir, name))
+
 
 def load_obstacles_from_config(config_path, base):
     """从 sample_config 读取 environment.obstacles 并在场景中显示。"""
@@ -401,7 +429,22 @@ STAGING_ROTMAT_CANDIDATES = {
     "leg_fr": _LEG_ROTMAT_CANDS,
     "leg_bl": _LEG_ROTMAT_CANDS,
     "leg_br": _LEG_ROTMAT_CANDS,
+    # shelf_unit 候选在 main() 里由 auto_rotmat 注入；此处仅为 import 失败时的兜底
+    "side_l":  [(np.eye(3), 0.0)],
+    "side_r":  [(np.eye(3), 0.0)],
+    "shelf_m": [(np.eye(3), 0.0)],
+    "shelf_t": [(np.eye(3), 0.0)],
 }
+
+
+def _staging_pose_rank(part_id: str, pose_tag: str, rotmat: np.ndarray) -> int:
+    """DFS 排序：层板 staging 优先竖立（local +Z 朝上）；旧 mesh 平放 I 排最后。"""
+    if str(part_id).startswith("shelf_"):
+        z_world = np.asarray(rotmat, dtype=float)[:, 2]
+        if abs(float(z_world[2])) > 0.85:
+            return 0 if float(z_world[2]) > 0 else 2
+        return 1
+    return {"直立": 0, "躺/斜": 1}.get(pose_tag, 99)
 
 
 def _classify_pose(rotmat: np.ndarray) -> str:
@@ -453,7 +496,8 @@ def _arms_collide_at_conf(robot, lft_jv, rgt_jv, obstacle_list):
 
 
 def _validate_loaded_layout(plan, robot, staging_obstacles, grasp_cache,
-                            world_poses, env_obstacles):
+                            world_poses, env_obstacles,
+                            active_part_ids=INITIAL_STAGING_PART_IDS):
     """加载 .layout 后做兼容性「校验 + 优化」。
 
     保持每件零件的 (x, y) 位置不变，但允许在该位置上换 rotmat（直立 / 躺
@@ -465,18 +509,12 @@ def _validate_loaded_layout(plan, robot, staging_obstacles, grasp_cache,
     True；任一件双臂×全部 rotmat 候选都不通过 ⇒ 返回 False（外层会
     丢弃 .layout 回退 DFS）。
     """
-    pid_list = [p for p in INITIAL_STAGING_PART_IDS
+    pid_list = [p for p in active_part_ids
                 if plan.get_staging(p) is not None and p in staging_obstacles]
     pick_d = RELAXED_PLANNING["pick_depart_distance"]
     place_d = RELAXED_PLANNING["place_approach_distance"]
-    print(f"\n[Layout 校验+优化] 强化 reason + 多 rotmat 尝试 "
-          f"(+Z 抬 {pick_d:.2f}m / −Z 下放 {place_d:.2f}m)…")
-    reason_kw = dict(
-        pick_depart_dir=_PICK_DEPART_DIR,
-        pick_depart_dist=pick_d,
-        place_approach_dir=_PLACE_APPROACH_DIR,
-        place_approach_dist=place_d,
-    )
+    print(f"\n[Layout 校验+优化] shelf 专用 reason（+Z pick_depart {pick_d:.2f}m / "
+          f"per-part ±Y place）…")
     for pid in pid_list:
         if pid not in world_poses:
             continue
@@ -485,7 +523,9 @@ def _validate_loaded_layout(plan, robot, staging_obstacles, grasp_cache,
         gc_part = grasp_cache.get(model_alias_for_part(pid))
         if gc_part is None:
             continue
-        rot_cands = [(st.rotmat, 0.0)]
+        reason_kw = sm.reason_kwargs(
+            pid, pick_depart_dist=pick_d, place_approach_dist=place_d)
+        rot_cands = STAGING_ROTMAT_CANDIDATES.get(pid, [(st.rotmat, 0.0)])
         chosen_rot, chosen_arm, chosen_pos = None, None, None
         base_xy = st.pos[:2].copy()
         base_z = float(st.pos[2])
@@ -536,22 +576,28 @@ def _validate_loaded_layout(plan, robot, staging_obstacles, grasp_cache,
     return True
 
 
-def apply_seed_staging(plan, staging_obstacles, seeds):
-    """预搜索失败时回退：用种子位姿写回 plan 与 staging 碰撞体。"""
-    for pid in INITIAL_STAGING_PART_IDS:
+def apply_seed_staging(plan, staging_obstacles, seeds,
+                       active_part_ids=INITIAL_STAGING_PART_IDS):
+    """预搜索失败时回退：用种子 xy + 各件默认 staging 朝向。"""
+    for pid in active_part_ids:
         st = plan.get_staging(pid)
         if st is None:
             continue
-        p = seeds[pid].copy() if pid in seeds else st.pos.copy()
-        r = np.eye(3)
-        plan.set_staging(pid, pos=p, rotmat=r)
+        seed = seeds[pid].copy() if pid in seeds else st.pos.copy()
+        p, r = default_seed_staging_pose(pid, seed)
+        plan.set_staging(pid, pos=p.copy(), rotmat=r.copy())
         o = staging_obstacles.get(pid)
         if o is not None:
-            o.pos, o.rotmat = p, r
+            o.pos, o.rotmat = p.copy(), r.copy()
 
 
 def model_alias_for_part(part_id):
-    return "seat_model" if part_id == "seat" else "leg_model"
+    pid = str(part_id)
+    if pid.startswith("shelf"):
+        return "shelf_model"
+    if pid.startswith("side"):
+        return "side_model"
+    raise KeyError(f"Unknown shelf_unit part id: {part_id!r}")
 
 
 def load_grasp_cache(grasp_paths):
@@ -673,10 +719,11 @@ def _obstacle_list_for_reason(search_part_ids, part_id, staging_obstacles, env_o
 
 
 def prevalidate_initial_staging_layout(plan, robot, staging_obstacles, grasp_cache,
-                                     world_poses, env_obstacles, seeds, assembly_def):
+                                     world_poses, env_obstacles, seeds, assembly_def,
+                                     active_part_ids=INITIAL_STAGING_PART_IDS):
     goal_models = build_goal_obstacle_models(assembly_def, world_poses)
     search_part_ids = [
-        p for p in INITIAL_STAGING_PART_IDS
+        p for p in active_part_ids
         if plan.get_staging(p) is not None and p in staging_obstacles
     ]
     default_poses = {}
@@ -779,12 +826,14 @@ def prevalidate_initial_staging_layout(plan, robot, staging_obstacles, grasp_cac
                 p, r = layout[vp]
                 staging_obstacles[vp].pos = p
                 staging_obstacles[vp].rotmat = r
-        v_kw = dict(
-            pick_depart_dir=_PICK_DEPART_DIR,
-            pick_depart_dist=RELAXED_PLANNING["pick_depart_distance"],
-            place_approach_dir=_PLACE_APPROACH_DIR,
-            place_approach_dist=RELAXED_PLANNING["place_approach_distance"],
-        )
+        placed = set()
+        for sd in assembly_def.steps:
+            sp = sd.part_id
+            v_kw = sm.reason_kwargs(
+                sp,
+                pick_depart_dist=RELAXED_PLANNING["pick_depart_distance"],
+                place_approach_dist=RELAXED_PLANNING["place_approach_distance"],
+            )
         placed = set()
         for sd in assembly_def.steps:
             sp = sd.part_id
@@ -929,10 +978,9 @@ def prevalidate_initial_staging_layout(plan, robot, staging_obstacles, grasp_cac
                 if _arms_collide_at_conf(robot, _HOME_JV, _HOME_JV, home_obs):
                     continue
 
-                reason_kw = dict(
-                    pick_depart_dir=_PICK_DEPART_DIR,
+                reason_kw = sm.reason_kwargs(
+                    pid,
                     pick_depart_dist=RELAXED_PLANNING["pick_depart_distance"],
-                    place_approach_dir=_PLACE_APPROACH_DIR,
                     place_approach_dist=RELAXED_PLANNING["place_approach_distance"],
                 )
                 arm0 = robot.lft_arm if arm_pref[0] == "左臂" else robot.rgt_arm
@@ -963,6 +1011,7 @@ def prevalidate_initial_staging_layout(plan, robot, staging_obstacles, grasp_cac
         _POSE_RANK = {"直立": 0, "躺/斜": 1}
         feasible.sort(key=lambda x: (
             arm_rank.get(x[5], 99),
+            _staging_pose_rank(pid, x[6], x[4]),
             _POSE_RANK.get(x[6], 99),
             -x[0],
         ))
@@ -1429,7 +1478,34 @@ def animate_sequence(base, execution_result, interval=0.01):
     taskMgr.doMethodLater(interval, _update, "sequence_animate", extraArgs=[state], appendTask=True)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Dual-arm shelf_unit assembly motion demo (Panda3D)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  python -m sealp.examples.motion.dual_sequence_execution_shelf\n"
+            "  python -m sealp.examples.motion.dual_sequence_execution_shelf "
+            "--skip-parts shelf_t\n"
+        ),
+    )
+    parser.add_argument(
+        "--skip-parts", type=str, default="",
+        help="跳过装配步（逗号分隔）。例: shelf_t → 只执行 side_l,shelf_m,side_r；"
+             "会自动加载 dual_shelf_unit_optimal_searched_skip_<parts>.layout",
+    )
+    parser.add_argument(
+        "--layout", type=str, default="",
+        help="预搜索 layout 路径；默认按 --skip-parts 推断文件名",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    skip_parts = _parse_skip_parts(args.skip_parts)
+    skip_set = frozenset(skip_parts)
+
     base = wd.World(cam_pos=[1.5, -0.3, 1.2], lookat_pos=[0.3, -0.3, 0.1])
     mgm.gen_frame().attach_to(base)
 
@@ -1440,10 +1516,10 @@ def main():
     env_obstacles = load_obstacles_from_config(config_path, base)
 
     asmdef_dir = os.path.join(os.path.dirname(__file__), "..", "..", "assembly_sequence", "_demo_output")
-    asmdef_path = os.path.abspath(os.path.join(asmdef_dir, "yuanchair.asmdef"))
+    asmdef_path = os.path.abspath(os.path.join(asmdef_dir, "shelf_unit.asmdef"))
     if not os.path.isfile(asmdef_path):
         print(f"Assembly definition not found at: {asmdef_path}, generating…")
-        from sealp.assembly_sequence.gen_yuanchair_asmdef import main as gen_asm
+        from sealp.assembly_sequence.gen_shelf_unit_asmdef import main as gen_asm
         gen_asm()
     if not os.path.isfile(asmdef_path):
         print(f"ERROR: {asmdef_path}")
@@ -1451,37 +1527,50 @@ def main():
 
     asm = AssemblyDef.load(asmdef_path)
     print(f"Loaded: {asm.name} ({asm.n_parts} parts, {asm.n_steps} steps)")
-    print(f"[装配顺序] {[(s.step_id, s.part_id) for s in asm.steps]}")
-    # 期望顺序在 ``gen_yuanchair_asmdef.py`` 已固化为
-    #   seat → leg_bl → leg_br → leg_fl → leg_fr
-    # 这里只做防御性校验：如有人手改 asmdef 或回退到旧 yaml，会立刻
-    # 警告但不强行改写（避免与 .asmdef 静默不一致）。
-    _EXPECTED_ORDER = ("seat", "leg_bl", "leg_br", "leg_fl", "leg_fr")
     _actual_order = tuple(s.part_id for s in asm.steps)
-    if _actual_order != _EXPECTED_ORDER:
-        print(f"[装配顺序][WARN] 期望 {_EXPECTED_ORDER}，"
+    print(f"[装配顺序] {[(s.step_id, s.part_id) for s in asm.steps]}")
+    if _actual_order != _EXPECTED_ASM_ORDER:
+        print(f"[装配顺序][WARN] 期望 {_EXPECTED_ASM_ORDER}，"
               f"asmdef 中是 {_actual_order}。请重跑："
-              f"`python -m sealp.assembly_sequence.gen_yuanchair_asmdef`。")
+              f"`python -m sealp.assembly_sequence.gen_shelf_unit_asmdef`。")
+
+    if skip_set:
+        print(f"[skip-parts] 跳过: {sorted(skip_set)}")
+    active_part_ids = _filter_asm_for_skip_parts(asm, skip_parts)
+    if skip_set:
+        print(f"[skip-parts] 执行: {list(active_part_ids)} "
+              f"({asm.n_steps} steps)")
 
     plan = TaskPlan(
         assembly_file=asmdef_path,
-        name="YuanChair Dual-Arm Execution",
-        description="Dual-arm sequential assembly of the YuanChair.",
+        name="ShelfUnit Dual-Arm Execution",
+        description="Dual-arm sequential assembly of shelf_unit.",
     )
     plan.set_assembly(asm)
 
-    center_y_offset = -0.30
-    plan.fixture_pos = np.array([0.0, center_y_offset, 0.0])
+    plan.fixture_pos = FIXTURE_POS.copy()
     _seeds = STAGING_SEEDS
     plan.fixture_rotmat = np.eye(3)
 
-    # 仅种子：预搜索成功后会覆盖为最终 staging
-    for pid in INITIAL_STAGING_PART_IDS:
-        plan.set_staging(pid, pos=_seeds[pid].copy(), rotmat=np.eye(3))
+    # 注入 shelf auto_rotmat 候选（层板竖立、侧板竖立等）
+    try:
+        _shelf_rot = staging_rotmat_candidates(verbose=False)
+        _shelf_rot = {k: v for k, v in _shelf_rot.items() if k in active_part_ids}
+        STAGING_ROTMAT_CANDIDATES.update(_shelf_rot)
+        print(f"[staging] 已加载 shelf auto_rotmat 候选: "
+              f"{', '.join(f'{k}={len(v)}' for k, v in _shelf_rot.items())}")
+    except Exception as e:
+        print(f"[WARN] shelf auto_rotmat 加载失败 ({e!r})，"
+              f"使用内置 fallback（层板 Rx90 立边）。")
 
-    for i in range(asm.n_steps):
+    # 种子位姿：侧板竖立、层板立边（非 rotmat=I 平放）
+    for pid in active_part_ids:
+        p, r = default_seed_staging_pose(pid, _seeds[pid])
+        plan.set_staging(pid, pos=p.copy(), rotmat=r.copy())
+
+    for s in asm.steps:
         plan.set_step_params(StepParams(
-            step_id=i,
+            step_id=s.step_id,
             primitive="single_arm_transport",
             approach_distance=RELAXED_PLANNING["step_approach_distance"],
             depart_distance=RELAXED_PLANNING["step_depart_distance"],
@@ -1493,6 +1582,8 @@ def main():
     )
 
     for pid in asm.part_ids:
+        if pid in skip_set:
+            continue
         if pid not in world_poses:
             continue
         gp, gr = world_poses[pid]
@@ -1513,17 +1604,17 @@ def main():
     robot.use_lft()
 
     grasp_paths = {
-        "leg_model": os.path.join(
+        "shelf_model": os.path.join(
             os.path.dirname(__file__), "..", "grasp", "_output",
-            "demo_yuanchair-part2_grasps.pickle"),
-        "seat_model": os.path.join(
+            "demo_shelf_unit-shelf_grasps.pickle"),
+        "side_model": os.path.join(
             os.path.dirname(__file__), "..", "grasp", "_output",
-            "demo_yuanchair-part1_grasps.pickle"),
+            "demo_shelf_unit-side_grasps.pickle"),
     }
 
     staging_obstacles = {}
     initial_obstacles = list(env_obstacles)
-    for pid in asm.part_ids:
+    for pid in active_part_ids:
         st = plan.get_staging(pid)
         if st is None:
             continue
@@ -1550,9 +1641,9 @@ def main():
     # motion_cache_path = os.path.join(motion_cache_dir, "yuanchair_dual_optimal_panthera3.pkl")
     # motion_cache_path = os.path.join(motion_cache_dir, "yuanchair_dual_optimal_panthera4.pkl")
     # motion_cache_path = os.path.join(motion_cache_dir, "yuanchair_dual_optimal_panthera5.pkl")
-    motion_cache_path = os.path.join(motion_cache_dir, "yuanchair_dual_optimal_panthera6.pkl")
+    motion_cache_path = os.path.join(motion_cache_dir, "shelf_unit_dual_optimal_panthera.pkl")
     motion_cache = None
-    _USE_MOTION_CACHE = True
+    _USE_MOTION_CACHE = False
     if _USE_MOTION_CACHE and os.path.isfile(motion_cache_path):
         try:
             with open(motion_cache_path, "rb") as f:
@@ -1590,9 +1681,11 @@ def main():
 
     # 优先使用预先搜索好的布局（由 sealp/examples/layout/find_optimal_layout.py 生成）。
     # 找到则跳过下面的 DFS 预搜索，节省启动时间，并保证可装配。
-    searched_layout_path = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), "..", "layout", "_output",
-        "dual_yuanchair_optimal_searched.layout"))
+    searched_layout_path = (
+        os.path.abspath(args.layout)
+        if args.layout
+        else _default_searched_layout_path(skip_parts)
+    )
     used_searched_layout = False
     # ── GOLDEN staging：直接应用已实测可行的固定 staging ──
     # 比 DFS 预搜索更稳：DFS 内部 trac_ik 的 stochastic IK 会让多次
@@ -1647,7 +1740,7 @@ def main():
                 print(f"  [WARN] layout 未记录 robot_type，沿用旧文件；"
                       f"如出现穿模请重跑 find_optimal_layout。")
             for pid, (p, r) in loaded.staging_positions.items():
-                if pid not in INITIAL_STAGING_PART_IDS:
+                if pid not in active_part_ids:
                     continue
                 plan.set_staging(pid, pos=p.copy(), rotmat=r.copy())
                 obs = staging_obstacles.get(pid)
@@ -1666,11 +1759,14 @@ def main():
             # +Z 抬升 / −Z 下放的几何流；不通过则丢弃缓存重搜。
             if not _validate_loaded_layout(
                     plan, robot, staging_obstacles, gc,
-                    world_poses, env_obstacles):
+                    world_poses, env_obstacles,
+                    active_part_ids=active_part_ids):
                 print("[Layout] 已加载布局与当前几何流不兼容，"
                       "丢弃缓存并回退到内置 DFS 重搜。")
                 used_searched_layout = False
-                apply_seed_staging(plan, staging_obstacles, _seeds)
+                apply_seed_staging(
+                    plan, staging_obstacles, _seeds,
+                    active_part_ids=active_part_ids)
             else:
                 print("  → 跳过 prevalidate_initial_staging_layout DFS。")
         except Exception as e:
@@ -1680,23 +1776,25 @@ def main():
     if not used_searched_layout:
         try:
             prevalidate_initial_staging_layout(
-                plan, robot, staging_obstacles, gc, world_poses, env_obstacles, _seeds, asm)
+                plan, robot, staging_obstacles, gc, world_poses, env_obstacles,
+                _seeds, asm, active_part_ids=active_part_ids)
         except Exception as e:
             print(f"\n[WARN] 预搜索失败: {e}")
             print("  已回退为种子初始位；仍打开窗口并尝试执行规划，便于查看场景与成功步的轨迹动画。")
             print("  提示：可先跑 `python -m sealp.examples.layout.search_dual_layout` "
                   "生成可装配布局后重试。")
-            apply_seed_staging(plan, staging_obstacles, _seeds)
+            apply_seed_staging(
+                plan, staging_obstacles, _seeds,
+                active_part_ids=active_part_ids)
 
     staging_colors = {
-        "seat": np.array([0.9, 0.6, 0.3, 0.85]),
-        "leg_fl": np.array([0.3, 0.7, 0.3, 0.85]),
-        "leg_fr": np.array([0.3, 0.3, 0.8, 0.85]),
-        "leg_bl": np.array([0.8, 0.3, 0.3, 0.85]),
-        "leg_br": np.array([0.7, 0.3, 0.7, 0.85]),
+        "shelf_m": np.array([0.45, 0.70, 0.90, 0.85]),
+        "shelf_t": np.array([0.45, 0.70, 0.90, 0.85]),
+        "side_l":  np.array([0.75, 0.55, 0.35, 0.85]),
+        "side_r":  np.array([0.75, 0.55, 0.35, 0.85]),
     }
     print("\n最终初始摆放（彩色）：")
-    for pid in asm.part_ids:
+    for pid in active_part_ids:
         st = plan.get_staging(pid)
         if st is None:
             continue
@@ -1707,7 +1805,8 @@ def main():
             vis.rgba = staging_colors.get(pid, np.array([0.5, 0.5, 0.5, 0.85]))
             vis.attach_to(base)
             mgm.gen_frame(pos=st.pos, ax_length=0.03).attach_to(base)
-            print(f"  {pid}: {np.round(st.pos, 4).tolist()}")
+            print(f"  {pid}: pos={np.round(st.pos, 4).tolist()}  "
+                  f"rot={_classify_pose(st.rotmat)} z_col={np.round(st.rotmat[:, 2], 3).tolist()}")
 
     robot.gen_meshmodel(alpha=0.2).attach_to(base)
 
@@ -1835,17 +1934,8 @@ def main():
             lin_gran = relax["linear_granularity"]
 
             def _inject_relaxed(kw):
-                """把所有 RELAXED_PLANNING 中的『宽松度』参数注入一臂 kwargs。"""
-                # 1) pick_approach: 距离=0 → 方向无几何意义，仅为兼容
+                """注入与零件无关的宽松度；方向由 ``shelf_motion`` 按 part_id 写入。"""
                 kw.setdefault("pick_approach_direction", _APPROACH_LINEAR_DIR)
-                # 2) pick_depart: +Z 抬升 (= pick_depart_distance)
-                kw.setdefault("pick_depart_direction", _PICK_DEPART_DIR)
-                kw.setdefault("pick_depart_distance", pick_depart)
-                # 4) place_approach: −Z 下放 (= place_approach_distance)
-                kw.setdefault("place_approach_direction_list",
-                              [_PLACE_APPROACH_DIR])
-                kw.setdefault("place_approach_distance_list", [place_app])
-                # —— 透传给 PickPlacePlanner 的内部宽松度
                 kw.setdefault("linear_granularity", lin_gran)
 
             kw_l = dict(kwargs)
@@ -1861,16 +1951,14 @@ def main():
             _inject_relaxed(kw_r)
 
             pid = kw_l.get("part_id")
-            if pid is not None and str(pid).startswith("leg_"):
-                leg_dist = relax["leg_place_depart_distance"]
-                for kw in (kw_l, kw_r):
-                    kw["place_depart_direction_list"] = [_LEG_PLACE_DEPART_DIR]
-                    kw["place_depart_distance_list"] = [leg_dist]
-            elif pid == "seat":
-                seat_dist = relax["seat_place_depart_distance"]
-                for kw in (kw_l, kw_r):
-                    kw["place_depart_direction_list"] = [_SEAT_PLACE_DEPART_DIR]
-                    kw["place_depart_distance_list"] = [seat_dist]
+            if pid is not None and sm.is_shelf_unit_part(str(pid)):
+                mot_over = dict(
+                    pick_depart_dist=pick_depart,
+                    place_approach_dist=place_app,
+                    place_depart_dist=relax["step_depart_distance"],
+                )
+                sm.apply_to_plan_kwargs(kw_l, str(pid), **mot_over)
+                sm.apply_to_plan_kwargs(kw_r, str(pid), **mot_over)
             kw_l.pop("part_id", None)
             kw_r.pop("part_id", None)
             obj_cmodel = kwargs.get("obj_cmodel")
@@ -2088,7 +2176,8 @@ def main():
     executor._execute_step = _patched
 
     print("\nExecuting…")
-    result = executor.execute_all(stop_on_failure=False)
+    # 调试阶段建议失败即停，避免 Step 1 失败后继续执行导致后续报错混杂。
+    result = executor.execute_all(stop_on_failure=True)
 
     # ── 路径缓存写盘（5/5 全成功 + 本次没用 cache）──
     if (motion_cache is None and result.success

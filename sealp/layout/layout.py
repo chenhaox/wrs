@@ -49,6 +49,25 @@ def _float_representer(dumper: yaml.Dumper, value: float):
 
 yaml.add_representer(float, _float_representer)
 
+
+def _tuple_representer(dumper: yaml.Dumper, value: tuple):
+    """Save tuples as plain YAML lists (avoid !!python/tuple)."""
+    return dumper.represent_sequence("tag:yaml.org,2002:seq", list(value))
+
+
+yaml.add_representer(tuple, _tuple_representer)
+
+
+def _construct_python_tuple(loader: yaml.SafeLoader, node):
+    """Allow loading legacy layouts that contain !!python/tuple in metadata."""
+    return tuple(loader.construct_sequence(node))
+
+
+yaml.SafeLoader.add_constructor(
+    "tag:yaml.org,2002:python/tuple",
+    _construct_python_tuple,
+)
+
 FORMAT_VERSION = "1.0"
 
 

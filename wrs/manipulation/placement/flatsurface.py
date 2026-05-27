@@ -253,7 +253,7 @@ if __name__ == '__main__':
     import wrs.visualization.panda.world as wd
 
     base = wd.World(cam_pos=[1, 1, 1], lookat_pos=[0, 0, 0])
-    obj_path = os.path.join(os.path.dirname(rm.__file__), 'objects', 'bunnysim.stl')
+    obj_path = os.path.join(os.path.dirname(rm.__file__), 'objects', 'post.stl')
     ground = mcm.gen_box(xyz_lengths=[.5, .5, .01], pos=np.array([0, 0, -0.01]))
     ground.attach_to(base)
     bunny = mcm.CollisionModel(obj_path)

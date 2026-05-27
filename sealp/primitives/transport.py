@@ -100,6 +100,7 @@ class TransportPrimitive(MotionPrimitive):
         place_depart_distance_list = kwargs.get(
             "place_depart_distance_list", [depart_distance] * n)
 
+        grasp_obstacle_list = kwargs.get("grasp_obstacle_list")
         gpp_kwargs = dict(
             obj_cmodel=obj_cmodel,
             grasp_collection=grasp_collection,
@@ -113,6 +114,7 @@ class TransportPrimitive(MotionPrimitive):
             place_depart_direction_list=place_depart_direction_list,
             place_depart_distance_list=place_depart_distance_list,
             obstacle_list=obstacle_list,
+            grasp_obstacle_list=grasp_obstacle_list,
             use_rrt=use_rrt,
         )
         pick_app_dir = kwargs.get("pick_approach_direction")

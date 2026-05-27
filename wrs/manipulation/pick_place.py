@@ -101,6 +101,8 @@ class PickPlacePlanner(adp.ADPlanner):
                             pick_depart_distance=.07,
                             linear_granularity=.02,
                             obstacle_list=None,
+                            moveto_obstacle_list=None,
+                            moveto_rrt_obstacle_list=None,
                             use_rrt=True,
                             toggle_dbg=False):
         """
@@ -161,6 +163,8 @@ class PickPlacePlanner(adp.ADPlanner):
             moveto = adp.mpi.motd.MotionData(robot=self.robot)
             # move to goals
             moveto_start_jnt_values = pick_depart.jv_list[-1]
+            place_obs = moveto_obstacle_list if moveto_obstacle_list is not None else obstacle_list
+            place_rrt_obs = moveto_rrt_obstacle_list if moveto_rrt_obstacle_list is not None else obstacle_list
             for i, goal_pose in enumerate(moveto_pose_list):
                 goal_tcp_pos = goal_pose[1].dot(grasp.ac_pos) + goal_pose[0]
                 goal_tcp_rotmat = goal_pose[1].dot(grasp.ac_rotmat)
@@ -174,7 +178,8 @@ class PickPlacePlanner(adp.ADPlanner):
                                                      depart_distance=moveto_depart_distance_list[i],
                                                      depart_ee_values=None,  # do not change jaw width
                                                      linear_granularity=linear_granularity,
-                                                     obstacle_list=obstacle_list,
+                                                     obstacle_list=place_obs,
+                                                     rrt_obstacle_list=place_rrt_obs,
                                                      use_rrt=use_rrt,
                                                      toggle_dbg=toggle_dbg)
                 if moveto_ap is None:
@@ -207,6 +212,7 @@ class PickPlacePlanner(adp.ADPlanner):
                            linear_granularity=.02,
                            use_rrt=True,
                            obstacle_list=None,
+                           grasp_obstacle_list=None,
                            reason_grasps=True,
                            toggle_dbg=False):
         """
@@ -251,10 +257,11 @@ class PickPlacePlanner(adp.ADPlanner):
             place_depart_direction_list = [rm.const.z_ax] * len(goal_pose_list)
         if place_depart_distance_list is None:
             place_depart_distance_list = [.07] * len(goal_pose_list)
+        obs_for_grasp = grasp_obstacle_list if grasp_obstacle_list is not None else obstacle_list
         if reason_grasps:
             common_gid_list = self.reason_common_gids(grasp_collection=grasp_collection,
                                                       goal_pose_list=[obj_cmodel.pose] + goal_pose_list,
-                                                      obstacle_list=obstacle_list,
+                                                      obstacle_list=obs_for_grasp,
                                                       toggle_dbg=False)
         else:
             common_gid_list = range(len(grasp_collection))
@@ -279,6 +286,8 @@ class PickPlacePlanner(adp.ADPlanner):
                                                        pick_depart_distance=pick_depart_distance,
                                                        linear_granularity=linear_granularity,
                                                        obstacle_list=obstacle_list,
+                                                       moveto_obstacle_list=obs_for_grasp,
+                                                       moveto_rrt_obstacle_list=obstacle_list,
                                                        use_rrt=use_rrt,
                                                        toggle_dbg=toggle_dbg)
             if pick_and_moveto is None:

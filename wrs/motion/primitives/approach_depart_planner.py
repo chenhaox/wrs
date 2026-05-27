@@ -258,6 +258,7 @@ class ADPlanner(object):
                      ee_values=None,
                      obstacle_list=None,  #
                      object_list=None,  #
+                     rrt_obstacle_list=None,
                      use_rrt=True,
                      toggle_dbg=False):
         """
@@ -268,8 +269,9 @@ class ADPlanner(object):
         :param linear_distance:
         :param linear_granularity:
         :param ee_values:
-        :param obstacle_list: obstacles, will be checked by both rrt and linear
+        :param obstacle_list: obstacles for linear approach
         :param object_list: target objects, will be checked by rrt, but not by linear
+        :param rrt_obstacle_list: obstacles for RRT transit; defaults to obstacle_list
         :param use_rrt:
         :return:
         """
@@ -277,6 +279,7 @@ class ADPlanner(object):
             obstacle_list = []
         if object_list is None:
             object_list = []
+        rrt_obs = rrt_obstacle_list if rrt_obstacle_list is not None else obstacle_list
         linear_app = self.gen_linear_approach(goal_tcp_pos=goal_tcp_pos,
                                               goal_tcp_rotmat=goal_tcp_rotmat,
                                               direction=linear_direction,
@@ -297,7 +300,9 @@ class ADPlanner(object):
                 self.robot.change_ee_values(ee_values=ee_values)
             start2app = self.rrtc_planner.plan(start_conf=start_jnt_values,
                                                goal_conf=linear_app.jv_list[0],
-                                               obstacle_list=obstacle_list + object_list,
+                                               obstacle_list=rrt_obs + object_list,
+                                               start_obstacle_list=rrt_obs + object_list,
+                                               goal_obstacle_list=obstacle_list + object_list,
                                                ext_dist=.1,
                                                max_time=100,
                                                toggle_dbg=toggle_dbg)
@@ -309,7 +314,7 @@ class ADPlanner(object):
         else:
             start2app = self.im_planner.gen_interplated_between_given_conf(start_jnt_values=start_jnt_values,
                                                                            end_jnt_values=linear_app.jv_list[0],
-                                                                           obstacle_list=obstacle_list + object_list,
+                                                                           obstacle_list=rrt_obs + object_list,
                                                                            ee_values=ee_values)
             if start2app is None:
                 print("ADPlanner: Cannot interpolate the motion from start_jnt_values to the beginning of approach!")
@@ -396,6 +401,7 @@ class ADPlanner(object):
                             linear_granularity=.03,
                             obstacle_list=None,
                             object_list=None,
+                            rrt_obstacle_list=None,
                             use_rrt=True,
                             toggle_dbg=False):
         """
@@ -426,6 +432,7 @@ class ADPlanner(object):
                                          linear_granularity=linear_granularity,
                                          obstacle_list=obstacle_list,
                                          object_list=object_list,
+                                         rrt_obstacle_list=rrt_obstacle_list,
                                          use_rrt=use_rrt,
                                          toggle_dbg=toggle_dbg)
         if app_mot_data is None:

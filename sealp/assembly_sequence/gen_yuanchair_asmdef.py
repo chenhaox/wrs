@@ -76,10 +76,17 @@ def generate() -> AssemblyDef:
     # 解空间被压得很薄。改为「先后腿、后前腿」：装后腿时 chair 上只
     # 有 seat（远端空旷），装前腿时虽然后腿已立起，但前腿组装位
     # (x≈0.19) 在近端，机械臂走"侧弧"避开后腿余量大。
+    #
+    # 命名约定：``_l`` 后缀 → 世界系 +y 侧（左臂可达，base y=0）；
+    #          ``_r`` 后缀 → 世界系 -y 侧（右臂可达，base y=-0.62）。
+    # 与 ``_arm_priority_for_part`` 和前腿 ``leg_fl/leg_fr`` 的 rel_pos
+    # 严格保持一致；之前 bl/br 的 rel_pos.y 是反的，导致左臂被分到
+    # 世界 -y 区目标（physically 触不到），右臂被分到 +y 区目标
+    # （触不到），双臂指令几乎必出 IK fail。
     seat_pos = np.array([0.30, 0.0, 0.0])
     leg_specs = [
-        ("leg_bl", "Back-Left Leg",   np.array([0.41, -0.11, 0.02])),
-        ("leg_br", "Back-Right Leg",  np.array([0.41,  0.11, 0.02])),
+        ("leg_bl", "Back-Left Leg",   np.array([0.41,  0.11, 0.02])),
+        ("leg_br", "Back-Right Leg",  np.array([0.41, -0.11, 0.02])),
         ("leg_fl", "Front-Left Leg",  np.array([0.19,  0.11, 0.02])),
         ("leg_fr", "Front-Right Leg", np.array([0.19, -0.11, 0.02])),
     ]
