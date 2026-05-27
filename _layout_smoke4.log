@@ -1,0 +1,8 @@
+﻿python.exe : D:\Project\wrs-sealp\wrs\basis\robot_math.py:920: RuntimeWarning: invalid value encountered in divide
+所在位置 C:\Users\ZoWest\AppData\Local\Temp\ps-script-45e80728-9fff-4c8f-913c-4a5c39de44ab.ps1:118 字符: 32
++ ... NG='utf-8'; & "D:\Soft\tools\anaconda\envs\spatialvla\python.exe" -m  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\Project\wrs-...tered in divide:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  ax = deltaw / angle if isinstance(deltaw, np.ndarray) else None

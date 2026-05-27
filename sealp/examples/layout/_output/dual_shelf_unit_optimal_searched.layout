@@ -1,0 +1,173 @@
+# SEALP Workspace Layout v1.0
+# dual_shelf_unit_optimal_searched_skip_shelf_t
+
+format_version: '1.0'
+name: dual_shelf_unit_optimal_searched_skip_shelf_t
+robot_base:
+  pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+assembly_station:
+  pos:
+  - 0.5
+  - !!float '0'
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+staging:
+  side_l:
+    pos:
+    - 0.52
+    - 0.1
+    - !!float '-0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  shelf_m:
+    pos:
+    - 0.35
+    - -0.2
+    - 0.075
+    rotmat:
+    - - 0.707107
+      - !!float '0'
+      - -0.707107
+    - - -0.707107
+      - !!float '0'
+      - -0.707107
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+  side_r:
+    pos:
+    - 0.52
+    - -0.55
+    - !!float '-0'
+    rotmat:
+    - - 0.707107
+      - 0.707107
+      - !!float '0'
+    - - -0.707107
+      - 0.707107
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+metadata:
+  search_method: random_optimal
+  n_samples: 20
+  l3_enabled: false
+  l3_pass: false
+  robot_type: panthera_ht
+  arm_y_offset: 0.62
+  weights:
+    grasp: 0.3
+    manip: 0.1
+    manip_ep: 0.1
+    manip_traj: 0.4
+    dist: 0.2
+  norm_targets:
+    grasp_min: !!float '15'
+    grasp_mean: !!float '25'
+    grasp_hill_k: !!float '2'
+    grasp_min_weight: 0.7
+    manip: 0.03
+    manip_traj: 0.02
+    dist_decay: 0.5
+    n_traj_waypoints: 12
+  score_components:
+    per_part_manip:
+      side_l: !!float '0'
+      shelf_m: 0.00468629
+      side_r: !!float '0'
+    per_part_dist:
+      side_l: 0.0256125
+      shelf_m: 0.261008
+      side_r: 0.466429
+    per_part_traj_min:
+      side_l: 0.0196532
+      shelf_m: 0.00468629
+      side_r: 0.0150389
+    per_part_traj_mean:
+      side_l: 0.0205414
+      shelf_m: 0.00468629
+      side_r: 0.0222966
+    per_part_traj_curve:
+      side_l:
+      - 0.0214067
+      - 0.0212542
+      - 0.0211001
+      - 0.0209439
+      - 0.0207873
+      - 0.0206283
+      - 0.0204691
+      - 0.0203076
+      - 0.0201461
+      - 0.0199824
+      - 0.0198182
+      - 0.0196532
+      shelf_m:
+      - 0.00468629
+      side_r:
+      - 0.0209349
+      - 0.0261217
+      - 0.0278289
+      - 0.0277223
+      - 0.0266371
+      - 0.0250367
+      - 0.0232044
+      - 0.0213213
+      - 0.0195067
+      - 0.017839
+      - 0.016367
+      - 0.0150389
+    avg_manip: 0.0015621
+    avg_dist: 0.251016
+    traj_manip_min_avg: 0.0131261
+  filters:
+    min_same_arm_dist: 0.05
+  arm_choice:
+    side_l: lft
+    shelf_m: lft
+    side_r: lft
+  grasp_counts:
+    side_l: 113
+    shelf_m: 10
+    side_r: 14
+  pose_tags:
+    side_l: 直立
+    shelf_m: 躺/斜
+    side_r: 直立
+  z_offsets:
+    side_l: !!float '-0'
+    shelf_m: 0.075
+    side_r: !!float '-0'
+  manipulability_avg: 0.0015621
+  distance_cost: 0.251016
+  total_score: 0.45249

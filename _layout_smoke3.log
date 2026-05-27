@@ -1,0 +1,145 @@
+﻿python.exe : D:\Project\wrs-sealp\wrs\basis\robot_math.py:920: RuntimeWarning: invalid value encountered in divide
+所在位置 C:\Users\ZoWest\AppData\Local\Temp\ps-script-6009df82-ab10-4e7f-9e78-4d8695a67caa.ps1:118 字符: 32
++ ... NG='utf-8'; & "D:\Soft\tools\anaconda\envs\spatialvla\python.exe" -m  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\Project\wrs-...tered in divide:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  ax = deltaw / angle if isinstance(deltaw, np.ndarray) else None
+  traj_grasp_try=6  ik_retry_n=0  l2_debug=False  shelf_funnel=True
+[shelf_unit] staging xy bounds = work_table 鈭?y-clip (margin=0.06m)
+  x 鈭?[0.005, 0.685]  y 鈭?[-0.550, 0.150]  (all parts)
+[shelf_unit] auto_rotmat: 1 env obstacle(s)
+[shelf_unit] fixture=[0.5, 0.0, 0.0] auto-infer staging rotmats:
+  [auto_rotmat] cache hit (shelf_unit_fixture50_v5_side_l): 4 candidates
+  [side_l] 4 rotmat candidate(s)
+  [auto_rotmat] cache hit (shelf_unit_fixture50_v5_shelf_m): 6 candidates
+  [shelf_m] 6 rotmat candidate(s)
+  [auto_rotmat] cache hit (shelf_unit_fixture50_v5_shelf_t): 6 candidates
+  [shelf_t] 6 rotmat candidate(s)
+  [auto_rotmat] cache hit (shelf_unit_fixture50_v5_side_r): 2 candidates
+  [side_r] 2 rotmat candidate(s)
+
+============================================================
+[Preflight] Shelf Unit 鍑犱綍 / goal / staging 璇婃柇
+============================================================
+  fixture_pos = [0.5, 0.0, 0.0]
+  side mesh extent  = [0.09, 0.018, 0.3]
+  shelf mesh extent = [0.09, 0.15, 0.015]
+  shelf vertical@I  = False  (staging rot=I, z_off=0.0750)
+
+  鈹€鈹€ World goal 浣嶅Э锛坒ixture 鍥哄畾锛屾湭鎼滅储锛夆攢鈹€
+    side_l   pos=[0.5, 0.084, 0.0]  z_axis=[0.0, 0.0, 1.0]
+    shelf_m  pos=[0.5, 0.0, 0.15]  z_axis=[1.0, 0.0, 0.0]
+    shelf_t  pos=[0.5, 0.0, 0.345]  z_axis=[1.0, 0.0, 0.0]
+    side_r   pos=[0.5, -0.084, 0.0]  z_axis=[0.0, 0.0, 1.0]
+    shelf_m 棣栭€?staging[0] vs goal 鏃嬭浆瑙?鈮?120.0掳
+    shelf_t 棣栭€?staging[0] vs goal 鏃嬭浆瑙?鈮?120.0掳
+  grasp 'shelf_model': 65 from sealp\examples\grasp\_output\demo_shelf_unit-shelf_grasps.pickle
+  grasp 'side_model': 990 from sealp\examples\grasp\_output\demo_shelf_unit-side_grasps.pickle
+
+  鈹€鈹€ Goal 鍗曠偣鍙揪鎬э紙鏃犻殰纰嶏紝浠?IK + manip>0锛夆攢鈹€
+    side_l   lft: reachable=True  n_grasps=3  best_manip=0.0212
+    side_l   rgt: reachable=False  n_grasps=0  best_manip=0.0000
+    shelf_m  lft: reachable=True  n_grasps=20  best_manip=0.0274
+    shelf_m  rgt: reachable=False  n_grasps=0  best_manip=0.0000
+    shelf_t  lft: reachable=True  n_grasps=20  best_manip=0.0273
+    shelf_t  rgt: reachable=False  n_grasps=0  best_manip=0.0000
+    side_r   lft: reachable=True  n_grasps=3  best_manip=0.0212
+    side_r   rgt: reachable=False  n_grasps=0  best_manip=0.0000
+
+  鈹€鈹€ Staging rotmat 鍊欓€夛紙娉ㄥ叆鍚庯紝[0]=mesh 绔栫珛浼樺厛锛夆攢鈹€
+    side_l: 4 cands  [0] z_off=-0.0000  z_axis=[0.0, 0.0, 1.0]
+    shelf_m: 6 cands  [0] z_off=0.0750  z_axis=[0.0, -1.0, 0.0]
+    shelf_t: 6 cands  [0] z_off=0.0750  z_axis=[0.0, -1.0, 0.0]
+    side_r: 3 cands  [0] z_off=-0.0000  z_axis=[0.0, 0.0, 1.0]
+
+  璇存槑锛氬竷灞€鎼滅储鍙紭鍖?staging (x,y)锛沠ixture 鏈寜鍙岃噦 manip 鍔ㄦ€佷紭鍖栥€?
+  staging 鎼滅储鍖?= work_table 鍏ㄦ闈?x鈭圼0.005,0.685] y鈭圼-0.890,0.190]
+============================================================
+[fixture] search fixture_pos = [0.5, 0.0, 0.0] (涓?mesh_frames / dual_sequence_execution_shelf 涓€鑷?
+
+[auto_rotmat] injected staging rotmat candidates:
+  side_l: 4 candidate(s)
+  shelf_m: 6 candidate(s)
+  shelf_t: 6 candidate(s)
+  side_r: 3 candidate(s)
+
+[Task] shelf_unit
+  asmdef  = sealp\assembly_sequence\_demo_output\shelf_unit.asmdef
+  parts   = ('side_l', 'shelf_m', 'shelf_t', 'side_r')
+  output  = dual_shelf_unit_optimal_searched.layout
+  weights = Grasp*0.3 + Manip_EP*0.1 + Manip_TRAJ*0.4 + Dist*0.2 (sum=1.00)
+============================================================
+  Fast Optimal Layout Search - shelf_unit
+  Scoring (normalized 鈭?[0,1]): Grasp*0.3 + Manip_EP*0.1 + Manip_TRAJ*0.4 + Dist*0.2  (1.00 total)  | N_TRAJ_WAYPOINTS=12
+  mode=random  n_samples=5  seed=0
+============================================================
+  Loaded grasps 'shelf_model': 65 from sealp\examples\grasp\_output\demo_shelf_unit-shelf_grasps.pickle
+  Loaded grasps 'side_model': 990 from sealp\examples\grasp\_output\demo_shelf_unit-side_grasps.pickle
+
+[Random] 璇勪及 5 涓牱鏈?(L2 鍐呭眰姣忔牱鏈灇涓?19 涓?(pid,rotmat) 缁勫悎, seed=0)
+
+      [shelf-funnel] 鍚屼竴鍧楁澘 shelf_m vs shelf_t锛坰taging 鐢ㄥ凡 commit 鎴?rot[0]锛?
+        fail_at=shelf_m  placed_now=['side_l']
+  part    context                arm     gz no_obs  env no_stg full pick place fail@       
+  shelf_m step1(浠?side_l)        lft   0.15     65   65     11   11   10    10 ok           <<
+  shelf_t step1*(鏃?shelf_m goal) lft   0.34     51   51      0    0    0     0 no_common_gids
+        鍒楄鏄? no_obs=鏃犻殰纰?common | env=浠呮闈?| no_stg=鏃犳湭瑁?staging | full=鍏ㄩ殰纰?common | pick/place=鎾ょ/鎺ヨ繎鍚庡墿浣?
+  # 0 (seed anchor)  L1 ok, L2 fail: L2: step=1 shelf_m 鎵€鏈?rotmat 脳 鍗曡噦(lft)鍧囨棤鍙 (reason+traj, tested 6 rot 脳 1 arm(s)). fail_breakdown=[traj_probe=5, no_common_gids=1]. xy=[0.35, -0.2], goal_pos=[0.5, 0.0, 0.15], grasp_alias=shelf_model, grasp_num=65, placed=['side_l'], obs_num=4
+  # 1  L1 ok, L2 fail: L2: step=0 side_l 鎵€鏈?rotmat 脳 鍗曡噦(lft)鍧囨棤鍙 (reason+traj, tested 4 rot 脳 1 arm(s)). fail_breakdown=[traj_probe=2, no_common_gids=2]. xy=[0.4381, -0.3611], goal_pos=[0.5, 0.084, 0.0], grasp_alias=side_model, grasp_num=990, placed=[], obs_num=4
+
+      [shelf-funnel] 鍚屼竴鍧楁澘 shelf_m vs shelf_t锛坰taging 鐢ㄥ凡 commit 鎴?rot[0]锛?
+        fail_at=shelf_m  placed_now=['side_l']
+  part    context                arm     gz no_obs  env no_stg full pick place fail@       
+  shelf_m step1(浠?side_l)        lft   0.15      0    0      0    0    0     0 no_common_gids <<
+  shelf_t step1*(鏃?shelf_m goal) lft   0.34      0    0      0    0    0     0 no_common_gids
+        鍒楄鏄? no_obs=鏃犻殰纰?common | env=浠呮闈?| no_stg=鏃犳湭瑁?staging | full=鍏ㄩ殰纰?common | pick/place=鎾ょ/鎺ヨ繎鍚庡墿浣?
+  # 2  L1 ok, L2 fail: L2: step=1 shelf_m 鎵€鏈?rotmat 脳 鍗曡噦(lft)鍧囨棤鍙 (reason+traj, tested 6 rot 脳 1 arm(s)). fail_breakdown=[no_common_gids=6]. xy=[0.5598, -0.5481], goal_pos=[0.5, 0.0, 0.15], grasp_alias=shelf_model, grasp_num=65, placed=['side_l'], obs_num=4
+  # 3  L1 ok, L2 fail: L2: step=0 side_l 鎵€鏈?rotmat 脳 鍗曡噦(lft)鍧囨棤鍙 (reason+traj, tested 4 rot 脳 1 arm(s)). fail_breakdown=[no_common_gids=3, traj_probe=1]. xy=[0.592, -0.171], goal_pos=[0.5, 0.084, 0.0], grasp_alias=side_model, grasp_num=990, placed=[], obs_num=4
+
+      [shelf-funnel] 鍚屼竴鍧楁澘 shelf_m vs shelf_t锛坰taging 鐢ㄥ凡 commit 鎴?rot[0]锛?
+        fail_at=shelf_m  placed_now=['side_l']
+  part    context                arm     gz no_obs  env no_stg full pick place fail@       
+  shelf_m step1(浠?side_l)        lft   0.15     51   51      0    0    0     0 no_common_gids <<
+  shelf_t step1*(鏃?shelf_m goal) lft   0.34     51   51      0    0    0     0 no_common_gids
+        鍒楄鏄? no_obs=鏃犻殰纰?common | env=浠呮闈?| no_stg=鏃犳湭瑁?staging | full=鍏ㄩ殰纰?common | pick/place=鎾ょ/鎺ヨ繎鍚庡墿浣?
+  # 4  L1 ok, L2 fail: L2: step=1 shelf_m 鎵€鏈?rotmat 脳 鍗曡噦(lft)鍧囨棤鍙 (reason+traj, tested 6 rot 脳 1 arm(s)). fail_breakdown=[no_common_gids=6]. xy=[0.6831, 0.1366], goal_pos=[0.5, 0.0, 0.15], grasp_alias=shelf_model, grasp_num=65, placed=['side_l'], obs_num=4
+
+[Random] 5 涓牱鏈潎涓嶅彲琛?(178.5s)锛涘缓璁斁澶?bounds / 鎹?seed / 澧炲ぇ n_samples 閲嶈窇銆?
+
+============================================================
+[Failure Summary] 鎼滅储澶辫触婕忔枟
+============================================================
+  鎬绘牱鏈?    = 5
+  L1 閫氳繃    = 5  |  L1 澶辫触 = 0
+  L2 閫氳繃    = 0  |  L2 澶辫触 = 5 (鍦?L1 閫氳繃鏍锋湰涓?
+
+  鈹€鈹€ L2 棣栨澶辫触锛氳閰?step 鈹€鈹€
+    step 1 (shelf_m): 3/5 鏍锋湰
+    step 0 (side_l): 2/5 鏍锋湰
+
+  鈹€鈹€ L2 棣栨澶辫触锛氶浂浠?鈹€鈹€
+    shelf_m: 3/5 鏍锋湰
+    side_l: 2/5 鏍锋湰
+
+  鈹€鈹€ 澶辫触绫诲瀷锛堟寜鏍锋湰涓诲洜绮楀垎锛夆攢鈹€
+    no_common_gids (staging鈫攇oal 鏃犲叡鍚屾姄鍙?: 5
+
+  鈹€鈹€ L2 鍐呭眰 rot脳arm 灏濊瘯澶辫触璁℃暟锛堣法鏍锋湰绱姞锛夆攢鈹€
+    no_common_gids: 18
+    traj_probe: 8
+
+  鈹€鈹€ 鍏稿瀷澶辫触鏍锋湰 #0 鈹€鈹€
+    fail_step  = 1
+    fail_part  = shelf_m
+    breakdown  = {'traj_probe': 5, 'no_common_gids': 1}
+    reason     = L2: step=1 shelf_m 鎵€鏈?rotmat 脳 鍗曡噦(lft)鍧囨棤鍙 (reason+traj, tested 6 rot 脳 1 arm(s)). fail_breakdown=[traj_probe=5, no_common_gids=1]. xy=[0.35, -0.2], goal_pos=[0.5, 0.0, 0.15], grasp_alias=shelf_model, grasp_num=65, place鈥?
+
+  鎻愮ず锛氬綋鍓嶄粎鎼滅储 staging 鐨?(x,y)锛沠ixture 浣嶇疆鍥哄畾銆?
+        鑻?goal 浠呭崟鑷傚彲杈撅紝璇疯皟鏁?fixture / 鎶撳彇杩囨护锛屾垨鍚敤 --l2-debug銆?
+============================================================
+
+============================================================
+[FAIL] 鎼滅储澶辫触锛岀敤鏃?187.7s
+============================================================
