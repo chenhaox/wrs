@@ -79,7 +79,7 @@ class MotionData(object):
         return len(self._jv_list)
 
     def __add__(self, other):
-        if self.robot is other.robot:
+        if self.robot is other.rbt:
             self._jv_list += other.jv_list
             self._ev_list += other.ev_list
             self._oiee_gl_pose_list += other.oiee_gl_pose_list
@@ -195,9 +195,9 @@ def keep_states_decorator(method):
     """
 
     def wrapper(self, *args, **kwargs):
-        self.robot.backup_state()
+        self.rbt.backup_state()
         result = method(self, *args, **kwargs)
-        self.robot.restore_state()
+        self.rbt.restore_state()
         return result
 
     return wrapper
@@ -213,10 +213,10 @@ def keep_states_objpose_decorator(method):
     """
 
     def wrapper(self, *args, **kwargs):
-        self.robot.backup_state()
+        self.rbt.backup_state()
         obj_pose_bk = kwargs["obj_cmodel"].pose
         result = method(self, *args, **kwargs)
-        self.robot.restore_state()
+        self.rbt.restore_state()
         kwargs["obj_cmodel"].pose = obj_pose_bk
         return result
 

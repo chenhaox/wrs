@@ -38,9 +38,9 @@ class RRT(object):
 
         def wrapper(self, *args, **kwargs):
             if self.toggle_keep:
-                self.robot.backup_state()
+                self.rbt.backup_state()
                 result = method(self, *args, **kwargs)
-                self.robot.restore_state()
+                self.rbt.restore_state()
                 return result
             else:
                 result = method(self, *args, **kwargs)

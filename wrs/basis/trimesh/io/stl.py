@@ -25,6 +25,7 @@ def load_stl_binary(file_obj):
     :return:
     """
     header = np.frombuffer(file_obj.read(84), dtype=_stl_dtype_header)
+    face_count = int(header['face_count'][0])
     # now we check the axis_length from the header versus the axis_length of the file
     # data_start should always be position 84, but hard coding that felt ugly
     data_start = file_obj.tell()
@@ -36,7 +37,7 @@ def load_stl_binary(file_obj):
     # the binary format has a rigidly defined structure, and if the axis_length
     # of the file doesn't match the header, the loaded version is almost
     # certainly going to be garbage. 
-    data_ok = (data_end - data_start) == (header['face_count'] * _stl_dtype.itemsize)
+    data_ok = (data_end - data_start) == (face_count * _stl_dtype.itemsize)
 
     # this check is to see if this really is a binary STL file. 
     # if we don't do this and try to load a file that isn't structured properly 
@@ -46,7 +47,7 @@ def load_stl_binary(file_obj):
         raise ValueError('Binary STL has incorrect axis_length in header!')
     # all of our vertices will be loaded in order due to the STL format,
     # so faces are just sequential indices reshaped. 
-    faces = np.arange(header['face_count'] * 3).reshape((-1, 3))
+    faces = np.arange(face_count * 3).reshape((-1, 3))
     blob = np.frombuffer(file_obj.read(), dtype=_stl_dtype)
     result = {'vertices': blob['vertices'].reshape((-1, 3)),
               'face_normals': blob['normals'].reshape((-1, 3)),

@@ -230,7 +230,7 @@ if __name__ == '__main__':
             self.mot_data = mot_data
 
 
-    print(mot_attach_eeg.robot, mot_eeg.robot, mot_attach_eesd.robot, mot_eesd.robot)
+    print(mot_attach_eeg.rbt, mot_eeg.rbt, mot_attach_eesd.rbt, mot_eesd.rbt)
 
     anime_data = Data(mot_attach_eeg + mot_eeg + mot_attach_eesd + mot_eesd)
 
