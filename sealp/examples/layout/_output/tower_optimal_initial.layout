@@ -127,7 +127,7 @@ staging:
   top_cross:
     pos:
     - 0.414574
-    - -0.771337
+    - 0.171337
     - 0.003
     rotmat:
     - - !!float '1'
@@ -143,9 +143,9 @@ metadata:
   search_method: weighted_random_on_work_table
   l3_pass: false
   l3_fail_reason: ''
-  score: 0.641341
+  score: 0.641483
   score_components:
-    grasp: 0.865156
+    grasp: 0.865519
     manip: 0.149565
     dist: 0.560314
     rot: 0.720943
@@ -216,12 +216,12 @@ metadata:
     - -0.62
   grasp_counts:
     base_plate: 20
-    post_br: 42
-    post_fr: 51
-    post_bl: 39
-    post_fl: 115
-    middle_plate: 73
-    top_cross: 26
+    post_br: 45
+    post_fr: 54
+    post_bl: 41
+    post_fl: 108
+    middle_plate: 75
+    top_cross: 25
   topdown_counts_identity:
     post_br: 676
     post_fr: 676
@@ -275,8 +275,8 @@ metadata:
     post_fr: 0.00430677
     post_bl: !!float '0'
     post_fl: 0.0040619
-    middle_plate: 0.0123802
-    top_cross: 0.0132726
+    middle_plate: 0.0123803
+    top_cross: 0.0132725
   per_part_rot_angle:
     base_plate: !!float '0'
     post_br: !!float '0'

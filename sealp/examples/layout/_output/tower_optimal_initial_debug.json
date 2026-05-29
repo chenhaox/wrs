@@ -1,6 +1,6 @@
 {
   "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_optimal_initial.layout",
-  "score": 0.6413408476812573,
+  "score": 0.6414833966609931,
   "xy": {
     "base_plate": [
       0.34500000000000003,
@@ -87,12 +87,12 @@
   },
   "grasp_counts": {
     "base_plate": 20,
-    "post_br": 42,
-    "post_fr": 51,
-    "post_bl": 39,
-    "post_fl": 115,
-    "middle_plate": 73,
-    "top_cross": 26
+    "post_br": 45,
+    "post_fr": 54,
+    "post_bl": 41,
+    "post_fl": 108,
+    "middle_plate": 75,
+    "top_cross": 25
   },
   "arm_choice": {
     "base_plate": "preassembled",
@@ -104,8 +104,8 @@
     "top_cross": "lft"
   },
   "score_components": {
-    "grasp": 0.8651560567367986,
-    "manip": 0.14956451744378252,
+    "grasp": 0.8655186649631113,
+    "manip": 0.14956481564086366,
     "dist": 0.5603137234020207,
     "rot": 0.7209434519836979,
     "spatial_y_distribution": 0.825
