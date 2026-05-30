@@ -14,295 +14,72 @@ if project_root not in sys.path:
 from wrs import wd, mgm
 import wrs.basis.robot_math as rm
 import wrs.modeling.collision_model as mcm
-import wrs.modeling.model_collection as mmc
-from wrs.motion.probabilistic import multi_arm_rrt_connect as marrtc
 from wrs.motion.probabilistic import rrt_connect as rrtc
 from wrs.robot_sim.end_effectors.grippers.dh50.dh50 import Dh50
-from wrs.robot_sim.robots.ur7e._ur7e_common import UR7EBase
+from wrs.robot_sim.robots.ur7e.dual_ur7e_dh50 import DualUR7EDH50
 
 
 MESH_DIR = os.path.join(project_root, "old_version", "rbt", "ur7e", "meshes")
 MODEL_DIR = os.path.join(project_root, "yanpu", "models")
 
-PICK_CONF = np.array([0.16862, -1.8969, 1.5116, -1.1859, -1.5709, -1.4026])
-TRANSFER_CONF = np.array([-0.45, -1.9, 1.4, -1.1, -1.57, -1.7])
-PLACE_CONF = np.array([0.8, -1.7, 1.3, -1.2, -1.57, -0.7])
-BOX_RGBA = np.array([.05, .24, .56, .72])
-BOX1_CENTER = np.array([0.807, -0.245, 0.8])
-BOX2_CENTER = np.array([0.232, 0.32, 0.72])
-BOX1_PLACE = np.array([0.323, -0.36, 1.0])
-BOX2_PLACE = np.array([-0.094, -0.149, 0.9])
-OBJECT_UP_DOWN_ROTMAT = rm.rotmat_from_euler(0, np.pi, 0)
-U_POSE = (BOX2_PLACE, OBJECT_UP_DOWN_ROTMAT)
-U625_POSE = (BOX1_PLACE, OBJECT_UP_DOWN_ROTMAT)
-U_RGBA = np.array([.02, .58, .72, .96])
-U625_RGBA = np.array([.95, .48, .08, .96])
-DEMO_OBJECT_NAME = "U625"
-RACK_BASE_POS = np.array([0.7, 0.2, 0.7])
-RACK_YAW = -np.pi / 4.0
-RACK_ROT = rm.rotmat_from_axangle(rm.const.z_ax, RACK_YAW)
-RACK_VERTICAL_FRAME_HEIGHT = 0.7
-RACK_VERTICAL_FRAME_XY = np.array([.18, .18])
-RACK_HORIZONTAL_FRAME_X_LENGTH = .24
-RACK_HORIZONTAL_FRAME_Y_LENGTH = .70
-RACK_HORIZONTAL_FRAME_THICKNESS = .08
-RACK_VERTICAL_FRAME_RGB = np.array([.60, .62, .62])
-RACK_HORIZONTAL_FRAME_RGB = np.array([.05, .16, .32])
-RACK_VERTICAL_FRAME_ALPHA = .58
-RACK_HORIZONTAL_FRAME_ALPHA = .86
-RACK_COLUMN_HEIGHT = RACK_VERTICAL_FRAME_HEIGHT
-RACK_ARM_Y_OFFSET = 0.258485281374
-RACK_LFT_ARM_LOC_POS = np.array([0.0, RACK_ARM_Y_OFFSET, RACK_COLUMN_HEIGHT])
-RACK_RGT_ARM_LOC_POS = np.array([0.0, -RACK_ARM_Y_OFFSET, RACK_COLUMN_HEIGHT])
-RACK_LFT_ARM_LOC_ROTMAT = rm.rotmat_from_euler(-3.0 * np.pi / 4.0, 0, 0)
-RACK_RGT_ARM_LOC_ROTMAT = (rm.rotmat_from_euler(3.0 * np.pi / 4.0, 0, 0) @
-                           rm.rotmat_from_euler(0, 0, np.pi))
-BOX1_PART_OFFSETS = {
-    "1": np.array([0.0, -0.017, 0.02]),
-    "2": np.array([0.0, 0.013, 0.02]),
-    "3": np.array([-0.013, 0.0, 0.02]),
-    "4": np.array([0.013, 0.0, 0.02]),
-    "5": np.zeros(3),
-}
-BOX2_PART_OFFSETS = {
-    "1": np.array([0.007, 0.0, 0.02]),
-    "2": np.array([-0.01, 0.0, 0.02]),
-    "3": np.array([0.0, -0.017, 0.02]),
-    "4": np.array([0.0, 0.005, 0.02]),
-    "5": np.zeros(3),
-}
-U_PLACE_POSITIONS = [BOX1_PLACE,
-                     BOX1_PLACE + np.array([-0.1, 0.0, 0.0]),
-                     BOX1_PLACE + np.array([-0.2, 0.0, 0.0])]
-U_GRASP_POSITIONS = [BOX1_CENTER + np.array([0.2, 0.1, 0.0]),
-                     BOX1_CENTER + np.array([-0.2, 0.1, 0.0]),
-                     BOX1_CENTER + np.array([0.2, -0.1, 0.0]),
-                     BOX1_CENTER + np.array([-0.2, -0.1, 0.0])]
-U625_PLACE_POSITIONS = [BOX2_PLACE,
-                        BOX2_PLACE + np.array([0.0, 0.1, 0.0]),
-                        BOX2_PLACE + np.array([0.0, 0.2, 0.0])]
-U625_GRASP_POSITIONS = [BOX2_CENTER + np.array([0.1, 0.0, 0.0]),
-                        BOX2_CENTER + np.array([-0.1, 0.2, 0.0]),
-                        BOX2_CENTER + np.array([0.1, -0.2, 0.0]),
-                        BOX2_CENTER + np.array([-0.1, -0.2, 0.0])]
-OBJECT_SPECS = {
-    "u": {
-        "mesh": "u.STL",
-        "pose": U_POSE,
-        "rgba": U_RGBA,
-        "grasp_pickle": "U1_dh50.pickle",
-        "grasp_key": "u",
-        "grasp_positions": U_GRASP_POSITIONS,
-        "place_positions": U_PLACE_POSITIONS,
-    },
-    "U625": {
-        "mesh": "U625.STL",
-        "pose": U625_POSE,
-        "rgba": U625_RGBA,
-        "grasp_pickle": "U625_dh50.pickle",
-        "grasp_key": "U625",
-        "grasp_positions": U625_GRASP_POSITIONS,
-        "place_positions": U625_PLACE_POSITIONS,
-    },
-}
-
-
-class DualUR7EDH50:
-
-    def __init__(self,
-                 name="dual_ur7e_dh50",
-                 enable_cc=True,
-                 vertical_frame_height=RACK_VERTICAL_FRAME_HEIGHT,
-                 horizontal_frame_thickness=RACK_HORIZONTAL_FRAME_THICKNESS,
-                 horizontal_frame_x_length=RACK_HORIZONTAL_FRAME_X_LENGTH,
-                 horizontal_frame_y_length=RACK_HORIZONTAL_FRAME_Y_LENGTH):
-        self.name = name
-        self.body_root_pos = RACK_BASE_POS
-        self.body_root_rotmat = RACK_ROT
-        self.vertical_frame_height = float(vertical_frame_height)
-        self.horizontal_frame_thickness = float(horizontal_frame_thickness)
-        self.horizontal_frame_x_length = float(horizontal_frame_x_length)
-        self.horizontal_frame_y_length = float(horizontal_frame_y_length)
-        self.column_height = self.vertical_frame_height
-        self.lft_mount_loc_pos = np.array([0.0, RACK_ARM_Y_OFFSET, self.vertical_frame_height])
-        self.rgt_mount_loc_pos = np.array([0.0, -RACK_ARM_Y_OFFSET, self.vertical_frame_height])
-        self.lft_mount_loc_rotmat = RACK_LFT_ARM_LOC_ROTMAT
-        self.rgt_mount_loc_rotmat = RACK_RGT_ARM_LOC_ROTMAT
-        self.lft_mount_pos, self.lft_mount_rotmat = self._rack_pose_to_world(self.lft_mount_loc_pos,
-                                                                             self.lft_mount_loc_rotmat)
-        self.rgt_mount_pos, self.rgt_mount_rotmat = self._rack_pose_to_world(self.rgt_mount_loc_pos,
-                                                                             self.rgt_mount_loc_rotmat)
-        self.lft_arm = self._make_arm(name + "_lft",
-                                      self.lft_mount_pos,
-                                      self.lft_mount_rotmat,
-                                      np.array([np.pi / 2.0, -np.pi / 2.0, np.pi / 2.0,
-                                                -np.pi, -np.pi / 2.0, 0.0]),
-                                      enable_cc=enable_cc)
-        self.rgt_arm = self._make_arm(name + "_rgt",
-                                      self.rgt_mount_pos,
-                                      self.rgt_mount_rotmat,
-                                      np.array([0.0, -np.pi / 2.0, np.pi / 2.0,
-                                                -np.pi / 2.0, 0.0, 0.0]),
-                                      enable_cc=enable_cc)
-        self.arm_dict = {"lft_arm": self.lft_arm, "rgt_arm": self.rgt_arm}
-        self.manipulator_dict = self.arm_dict.copy()
-        self.set_active_arm("rgt_arm")
-        self.lft_arm.hndopen()
-        self.rgt_arm.hndopen()
-
-    def _rack_pose_to_world(self, loc_pos, loc_rotmat):
-        return (self.body_root_pos + self.body_root_rotmat @ loc_pos,
-                self.body_root_rotmat @ loc_rotmat)
-
-    @staticmethod
-    def _make_arm(name, mount_pos, mount_rotmat, home_conf, enable_cc):
-        return UR7EBase(pos=np.zeros(3),
-                        rotmat=np.eye(3),
-                        name=name,
-                        enable_cc=enable_cc,
-                        arm_home_conf=home_conf,
-                        arm_loc_pos=mount_pos,
-                        arm_loc_rotmat=mount_rotmat,
-                        hnd_cls=Dh50,
-                        hnd_loc_rotmat=rm.rotmat_from_axangle(rm.const.z_ax, rm.pi / 2),
-                        ik_solver="n")
-
-    def set_active_arm(self, arm_name):
-        if arm_name not in self.arm_dict:
-            raise ValueError(f"Unknown arm name: {arm_name}")
-        self.active_arm_name = arm_name
-        self.active_arm = self.arm_dict[arm_name]
-        self.arm = self.active_arm.arm
-        self.hnd = self.active_arm.hnd
-
-    @property
-    def gl_tcp_pos(self):
-        return self.active_arm.gl_tcp_pos
-
-    @property
-    def gl_tcp_rotmat(self):
-        return self.active_arm.gl_tcp_rotmat
-
-    @property
-    def oiee_list(self):
-        return self.active_arm.oiee_list
-
-    def backup_state(self):
-        self.lft_arm.backup_state()
-        self.rgt_arm.backup_state()
-
-    def restore_state(self):
-        self.rgt_arm.restore_state()
-        self.lft_arm.restore_state()
-
-    def get_jnt_values(self):
-        return self.active_arm.get_jnt_values()
-
-    def rand_conf(self):
-        return self.active_arm.rand_conf()
-
-    def are_jnts_in_ranges(self, jnt_values):
-        return self.active_arm.are_jnts_in_ranges(jnt_values)
-
-    def fk(self, component_name="arm", jnt_values=None):
-        if jnt_values is None and not isinstance(component_name, str):
-            jnt_values = component_name
-        return self.goto_given_conf(jnt_values)
-
-    def goto_given_conf(self, jnt_values):
-        return self.active_arm.goto_given_conf(jnt_values)
-
-    def goto_conf_dict(self, conf_dict):
-        for arm_name, conf in conf_dict.items():
-            self.arm_dict[arm_name].goto_given_conf(conf)
-
-    def get_ee_values(self):
-        return self.active_arm.get_ee_values()
-
-    def change_ee_values(self, ee_values):
-        return self.active_arm.change_ee_values(ee_values)
-
-    def hndopen(self):
-        self.active_arm.hndopen()
-
-    def is_collided(self, obstacle_list=None, other_robot_list=None, toggle_contacts=False, toggle_dbg=False):
-        if obstacle_list is None:
-            obstacle_list = []
-        external_robot_list = [] if other_robot_list is None else list(other_robot_list)
-        contacts = []
-        for arm_name, arm in self.arm_dict.items():
-            robot_list = external_robot_list + [
-                other_arm for other_name, other_arm in self.arm_dict.items()
-                if other_name != arm_name and other_arm.cc is not None
-            ]
-            result = arm.is_collided(obstacle_list=obstacle_list,
-                                     other_robot_list=robot_list,
-                                     toggle_contacts=toggle_contacts,
-                                     toggle_dbg=toggle_dbg)
-            if toggle_contacts:
-                if result[0]:
-                    contacts.extend(result[1])
-            elif result:
-                return True
-        return (len(contacts) > 0, contacts) if toggle_contacts else False
-
-    def gen_meshmodel(self,
-                      rgb=None,
-                      alpha=None,
-                      toggle_tcp_frame=True,
-                      toggle_jnt_frames=False,
-                      toggle_flange_frame=False,
-                      toggle_cdprim=False,
-                      toggle_cdmesh=False):
-        m_col = mmc.ModelCollection(name=self.name + "_meshmodel")
-        mcm.gen_box(xyz_lengths=np.array([RACK_VERTICAL_FRAME_XY[0],
-                                           RACK_VERTICAL_FRAME_XY[1],
-                                           self.vertical_frame_height]),
-                    pos=self.body_root_pos + self.body_root_rotmat @ np.array([0.0, 0.0,
-                                                                               self.vertical_frame_height / 2.0]),
-                    rotmat=self.body_root_rotmat,
-                    rgb=RACK_VERTICAL_FRAME_RGB,
-                    alpha=RACK_VERTICAL_FRAME_ALPHA).attach_to(m_col)
-        mcm.gen_box(xyz_lengths=np.array([self.horizontal_frame_x_length,
-                                           self.horizontal_frame_y_length,
-                                           self.horizontal_frame_thickness]),
-                    pos=self.body_root_pos + self.body_root_rotmat @ np.array(
-                        [0.0, 0.0, self.vertical_frame_height + self.horizontal_frame_thickness / 2.0]),
-                    rotmat=self.body_root_rotmat,
-                    rgb=RACK_HORIZONTAL_FRAME_RGB,
-                    alpha=RACK_HORIZONTAL_FRAME_ALPHA).attach_to(m_col)
-        self.lft_arm.gen_meshmodel(alpha=alpha,
-                                   toggle_tcp_frame=toggle_tcp_frame,
-                                   toggle_jnt_frames=toggle_jnt_frames,
-                                   toggle_flange_frame=toggle_flange_frame,
-                                   toggle_cdprim=toggle_cdprim,
-                                   toggle_cdmesh=toggle_cdmesh).attach_to(m_col)
-        self.rgt_arm.gen_meshmodel(alpha=alpha,
-                                   toggle_tcp_frame=toggle_tcp_frame,
-                                   toggle_jnt_frames=toggle_jnt_frames,
-                                   toggle_flange_frame=toggle_flange_frame,
-                                   toggle_cdprim=toggle_cdprim,
-                                   toggle_cdmesh=toggle_cdmesh).attach_to(m_col)
-        return m_col
+from yanpu.ur7e_dh50_pickandplace_params import (
+    BOX1_CENTER,
+    BOX1_PART_OFFSETS,
+    BOX2_CENTER,
+    BOX2_PART_OFFSETS,
+    BOX_RGBA,
+    DUAL_PICK_PLACE_SPECS,
+    OBJECT_SPECS,
+    RACK_ARM_Y_OFFSET,
+    RACK_ARM_Y_OFFSET_REFERENCE_FRAME_Y_LENGTH,
+    RACK_BASE_POS,
+    RACK_HORIZONTAL_FRAME_ALPHA,
+    RACK_HORIZONTAL_FRAME_RGB,
+    RACK_HORIZONTAL_FRAME_THICKNESS,
+    RACK_HORIZONTAL_FRAME_X_LENGTH,
+    RACK_HORIZONTAL_FRAME_Y_LENGTH,
+    RACK_LFT_ARM_LOC_ROTMAT,
+    RACK_RGT_ARM_LOC_ROTMAT,
+    RACK_ROT,
+    RACK_VERTICAL_FRAME_ALPHA,
+    RACK_VERTICAL_FRAME_HEIGHT,
+    RACK_VERTICAL_FRAME_RGB,
+    RACK_VERTICAL_FRAME_XY,
+    UR3_DUAL_LFT_HOME_CONF,
+    UR3_DUAL_RGT_HOME_CONF,
+)
 
 
 @dataclass
 class FrameState:
-    conf: np.ndarray
+    conf_dict: dict
+    jaw_width_dict: dict
+    payload_mode_dict: dict
+
+
+@dataclass
+class PickPlaceTask:
+    arm_name: str
+    object_name: str
+    grasp_index: int
+    pick_conf: np.ndarray
+    place_conf: np.ndarray
     jaw_width: float
-    payload_mode: str
+    pick_pose: tuple
+    place_pose: tuple
+    payload_rel_pose: tuple
+    pick_solution_type: str
+    place_solution_type: str
 
 
 class AnimationData:
 
-    def __init__(self, robot, robot_mesh_list, frame_list, payload, pick_pose, place_pose, payload_rel_pose):
+    def __init__(self, robot, robot_mesh_list, frame_list, payload_dict, task_dict):
         self.robot = robot
         self.robot_mesh_list = robot_mesh_list
         self.frame_list = frame_list
-        self.payload = payload
-        self.pick_pose = pick_pose
-        self.place_pose = place_pose
-        self.payload_rel_pose = payload_rel_pose
+        self.payload_dict = payload_dict
+        self.task_dict = task_dict
         self.counter = 0
         self.current_robot_mesh = None
         self.end_hold_counter = 0
@@ -346,7 +123,7 @@ def attach_position_markers(base, positions, rgb, alpha, radius):
 
 
 def attach_grasp_previews(base, spec):
-    obj_pos, obj_rotmat = spec["pose"]
+    obj_pos, obj_rotmat = spec["pick_pose"]
     grasp_info_list = load_grasp_info_list(spec)
     for grasp_info in grasp_info_list:
         jaw_width, jaw_center_pos, jaw_center_rotmat, _, _ = grasp_info
@@ -411,8 +188,8 @@ def build_inside_scene(base):
     payload_dict = {}
     for object_name, spec in OBJECT_SPECS.items():
         payload_dict[object_name] = make_collision_model(spec["mesh"],
-                                                         pos=spec["pose"][0],
-                                                         rotmat=spec["pose"][1],
+                                                         pos=spec["pick_pose"][0],
+                                                         rotmat=spec["pick_pose"][1],
                                                          rgba=spec["rgba"],
                                                          attach_to=base,
                                                          mesh_dir=MODEL_DIR)
@@ -422,7 +199,7 @@ def build_inside_scene(base):
                                 alpha=.42,
                                 radius=.012)
         attach_position_markers(base,
-                                spec["place_positions"],
+                                [pose[0] for pose in spec["place_poses"]],
                                 rgb=spec["rgba"][:3],
                                 alpha=.16,
                                 radius=.018)
@@ -442,82 +219,319 @@ def build_box_stack(base, center, rotmat, part_offsets):
     return part_list
 
 
-def plan_segment(planner, start_conf, goal_conf, obstacle_list):
+def make_planning_obstacle_list(robot, obstacle_list):
+    planning_obstacle_list = list(obstacle_list) if obstacle_list is not None else []
+    for frame_cmodel in robot.frame_collision_models:
+        if all(frame_cmodel is not obstacle for obstacle in planning_obstacle_list):
+            planning_obstacle_list.append(frame_cmodel)
+    return planning_obstacle_list
+
+
+def _stable_seed(*values):
+    seed = 17
+    for value in values:
+        for char in str(value):
+            seed = (seed * 31 + ord(char)) % (2 ** 32)
+    return seed
+
+
+def _grasp_tcp_pose(object_pose, grasp_info):
+    obj_pos, obj_rotmat = object_pose
+    _, jaw_center_pos, jaw_center_rotmat, _, _ = grasp_info
+    return obj_pos + obj_rotmat @ jaw_center_pos, obj_rotmat @ jaw_center_rotmat
+
+
+def _is_arm_conf_collision_free(arm, conf, obstacle_list, other_robot_list=None):
+    arm.goto_given_conf(conf)
+    return not arm.is_collided(obstacle_list=obstacle_list,
+                               other_robot_list=[] if other_robot_list is None else other_robot_list,
+                               toggle_dbg=False)
+
+
+def solve_ik_conf(arm,
+                  tgt_pos,
+                  tgt_rotmat,
+                  obstacle_list,
+                  seed_conf_list,
+                  other_robot_list=None,
+                  pos_tol=.015,
+                  rot_tol=.08):
+    for seed_conf in seed_conf_list:
+        if seed_conf is None:
+            continue
+        conf = arm.ik(tgt_pos=tgt_pos,
+                      tgt_rotmat=tgt_rotmat,
+                      seed_jnt_values=seed_conf,
+                      toggle_dbg=False)
+        if conf is None or not _is_arm_conf_collision_free(arm, conf, obstacle_list, other_robot_list):
+            continue
+        pos_err = np.linalg.norm(arm.gl_tcp_pos - tgt_pos)
+        rot_err = np.linalg.norm(rm.delta_w_between_rotmat(arm.gl_tcp_rotmat, tgt_rotmat))
+        if pos_err <= pos_tol and rot_err <= rot_tol:
+            return np.asarray(conf, dtype=float)
+    return None
+
+
+def solve_task_conf(arm,
+                    tgt_pos,
+                    tgt_rotmat,
+                    obstacle_list,
+                    seed_conf_list,
+                    other_robot_list=None,
+                    ik_seed_count=240,
+                    target_label="target"):
+    rng = np.random.default_rng(_stable_seed("ik", arm.name, np.round(tgt_pos, 4)))
+    jnt_ranges = arm.arm.jnt_ranges
+    ik_seed_list = list(seed_conf_list)
+    ik_seed_list.extend(rng.uniform(jnt_ranges[:, 0], jnt_ranges[:, 1], size=(ik_seed_count, len(jnt_ranges))))
+    conf = solve_ik_conf(arm, tgt_pos, tgt_rotmat, obstacle_list, ik_seed_list, other_robot_list)
+    if conf is not None:
+        return conf, "exact_ik"
+    raise RuntimeError(
+        f"Exact IK failed for {arm.name} {target_label}; closest-TCP fallback is disabled, so this object will not be grasped.")
+
+
+def try_solve_task_conf(*args, **kwargs):
+    try:
+        return solve_task_conf(*args, **kwargs)
+    except RuntimeError:
+        return None
+
+
+def _candidate_grasp_indices(task_spec, grasp_info_list):
+    if "grasp_indices" in task_spec:
+        return list(task_spec["grasp_indices"])
+    return list(range(len(grasp_info_list)))
+
+
+def build_pick_place_tasks(robot, obstacle_list=None):
+    planning_obstacle_list = make_planning_obstacle_list(robot, obstacle_list)
+    task_list = []
+    robot.backup_state()
+    try:
+        for arm_name, task_spec in DUAL_PICK_PLACE_SPECS.items():
+            object_name = task_spec["object_name"]
+            object_spec = OBJECT_SPECS[object_name]
+            grasp_info_list = load_grasp_info_list(object_spec)
+            pick_pose = object_spec["pick_pose"]
+            place_pose = object_spec["place_poses"][task_spec["place_index"]]
+            arm = robot.arm_dict[arm_name]
+            initial_conf = arm.get_jnt_values().copy()
+            selected_task = None
+            pick_failure_count = 0
+            place_failure_count = 0
+            candidate_grasp_indices = _candidate_grasp_indices(task_spec, grasp_info_list)
+            for grasp_index in candidate_grasp_indices:
+                grasp_info = grasp_info_list[grasp_index]
+                jaw_width = float(np.clip(grasp_info[0],
+                                          arm.hnd.jaw_range[0],
+                                          arm.hnd.jaw_range[1]))
+                pick_tcp_pos, pick_tcp_rotmat = _grasp_tcp_pose(pick_pose, grasp_info)
+                place_tcp_pos, place_tcp_rotmat = _grasp_tcp_pose(place_pose, grasp_info)
+                seed_conf_list = [arm.arm.home_conf, initial_conf]
+                pick_other_robot_list = []
+                for solved_task in task_list:
+                    solved_arm = robot.arm_dict[solved_task.arm_name]
+                    solved_arm.goto_given_conf(solved_task.pick_conf)
+                    pick_other_robot_list.append(solved_arm)
+                pick_result = try_solve_task_conf(
+                    arm,
+                    pick_tcp_pos,
+                    pick_tcp_rotmat,
+                    planning_obstacle_list,
+                    seed_conf_list,
+                    other_robot_list=pick_other_robot_list,
+                    target_label=f"{object_name} pick grasp #{grasp_index}")
+                if pick_result is None:
+                    pick_failure_count += 1
+                    arm.goto_given_conf(initial_conf)
+                    continue
+                pick_conf, pick_solution_type = pick_result
+                place_other_robot_list = []
+                for solved_task in task_list:
+                    solved_arm = robot.arm_dict[solved_task.arm_name]
+                    solved_arm.goto_given_conf(solved_task.place_conf)
+                    place_other_robot_list.append(solved_arm)
+                place_result = try_solve_task_conf(
+                    arm,
+                    place_tcp_pos,
+                    place_tcp_rotmat,
+                    planning_obstacle_list,
+                    [pick_conf, arm.arm.home_conf, initial_conf],
+                    other_robot_list=place_other_robot_list,
+                    target_label=f"{object_name} place grasp #{grasp_index}")
+                if place_result is None:
+                    place_failure_count += 1
+                    arm.goto_given_conf(initial_conf)
+                    continue
+                place_conf, place_solution_type = place_result
+                arm.goto_given_conf(pick_conf)
+                payload_rel_pose = arm.cvt_gl_pose_to_tcp(pick_pose[0], pick_pose[1])
+                selected_task = PickPlaceTask(arm_name=arm_name,
+                                             object_name=object_name,
+                                             grasp_index=grasp_index,
+                                             pick_conf=pick_conf,
+                                             place_conf=place_conf,
+                                             jaw_width=jaw_width,
+                                             pick_pose=pick_pose,
+                                             place_pose=place_pose,
+                                             payload_rel_pose=payload_rel_pose,
+                                             pick_solution_type=pick_solution_type,
+                                             place_solution_type=place_solution_type)
+                print(f"{arm.name}: selected {object_name} grasp #{grasp_index} from {len(candidate_grasp_indices)} candidates.")
+                break
+            if selected_task is None:
+                raise RuntimeError(
+                    f"No exact IK grasp found for {arm.name} {object_name}; tried {len(candidate_grasp_indices)} grasp candidates "
+                    f"({pick_failure_count} failed at pick, {place_failure_count} failed at place).")
+            task_list.append(selected_task)
+    finally:
+        robot.restore_state()
+    return task_list
+
+
+def plan_arm_segment(arm, start_conf, goal_conf, obstacle_list, other_robot_list=None):
+    planner = rrtc.RRTConnect(arm)
+    planner.rbt = arm
     mot_data = planner.plan(start_conf=start_conf,
                             goal_conf=goal_conf,
                             obstacle_list=obstacle_list,
-                            ext_dist=.55,
-                            max_time=4.0,
+                            other_robot_list=[] if other_robot_list is None else other_robot_list,
+                            ext_dist=.75,
+                            max_time=12.0,
                             smoothing_n_iter=0,
                             toggle_dbg=False)
     if mot_data is None:
-        print("RRT failed for one segment; falling back to a joint-space interpolation.")
-        return list(np.linspace(start_conf, goal_conf, 45))
+        print(f"RRT failed for {arm.name}; falling back to a joint-space interpolation.")
+        return list(np.linspace(start_conf, goal_conf, 60))
     return mot_data.jv_list
 
 
-def append_path(frame_list, path, jaw_width, payload_mode, skip_first=True):
-    path = path[1:] if skip_first and len(path) > 1 else path
-    for conf in path:
-        frame_list.append(FrameState(conf=np.asarray(conf), jaw_width=jaw_width, payload_mode=payload_mode))
+def _task_by_arm(task_list):
+    return {task.arm_name: task for task in task_list}
 
 
-def append_jaw_motion(frame_list, conf, start_width, end_width, payload_mode, n_frames=12):
-    for jaw_width in np.linspace(start_width, end_width, n_frames):
-        frame_list.append(FrameState(conf=np.asarray(conf), jaw_width=float(jaw_width), payload_mode=payload_mode))
+def _frame_from_tasks(task_list, conf_dict, jaw_width_dict, payload_mode):
+    return FrameState(conf_dict={arm_name: np.asarray(conf, dtype=float) for arm_name, conf in conf_dict.items()},
+                      jaw_width_dict=jaw_width_dict.copy(),
+                      payload_mode_dict={task.object_name: payload_mode for task in task_list})
 
 
-def build_frame_list(robot, obstacle_list):
+def append_dual_jaw_motion(frame_list, task_list, conf_dict, start_width_dict, end_width_dict, payload_mode, n_frames=12):
+    arm_names = list(conf_dict.keys())
+    for ratio in np.linspace(0.0, 1.0, n_frames):
+        jaw_width_dict = {
+            arm_name: float(start_width_dict[arm_name] +
+                            (end_width_dict[arm_name] - start_width_dict[arm_name]) * ratio)
+            for arm_name in arm_names
+        }
+        frame_list.append(_frame_from_tasks(task_list, conf_dict, jaw_width_dict, payload_mode))
+
+
+def append_dual_path(frame_list, task_list, path_dict, static_conf_dict, jaw_width_dict, payload_mode):
+    path_len = max(len(path) for path in path_dict.values())
+    for i in range(path_len):
+        conf_dict = {}
+        for arm_name, path in path_dict.items():
+            if path_len <= 1:
+                path_id = 0
+            else:
+                path_id = int(round(i * (len(path) - 1) / (path_len - 1)))
+            conf_dict[arm_name] = np.asarray(path[path_id], dtype=float)
+        for arm_name, conf in static_conf_dict.items():
+            conf_dict.setdefault(arm_name, conf)
+        frame_list.append(_frame_from_tasks(task_list, conf_dict, jaw_width_dict, payload_mode))
+
+
+def build_frame_list(robot, obstacle_list, task_list):
     random.seed(4)
     np.random.seed(4)
-    open_width = robot.hnd.jaw_range[1]
-    closed_width = robot.hnd.jaw_range[0]
-    planner = rrtc.RRTConnect(robot)
-    planner.rbt = robot
-
-    home_conf = robot.arm.home_conf.copy()
-    home_to_pick = plan_segment(planner, home_conf, PICK_CONF, obstacle_list)
-    pick_to_transfer = plan_segment(planner, PICK_CONF, TRANSFER_CONF, obstacle_list)
-    transfer_to_place = plan_segment(planner, TRANSFER_CONF, PLACE_CONF, obstacle_list)
-
+    planning_obstacle_list = make_planning_obstacle_list(robot, obstacle_list)
+    pick_conf_dict = {task.arm_name: task.pick_conf for task in task_list}
+    place_conf_dict = {task.arm_name: task.place_conf for task in task_list}
+    open_width_dict = {arm_name: robot.arm_dict[arm_name].hnd.jaw_range[1] for arm_name in pick_conf_dict}
+    closed_width_dict = {task.arm_name: task.jaw_width for task in task_list}
     frame_list = []
-    append_path(frame_list, home_to_pick, open_width, "pick", skip_first=False)
-    append_jaw_motion(frame_list, PICK_CONF, open_width, closed_width, "pick")
-    append_path(frame_list, pick_to_transfer, closed_width, "hold")
-    append_path(frame_list, transfer_to_place, closed_width, "hold")
-    append_jaw_motion(frame_list, PLACE_CONF, closed_width, open_width, "hold")
-    append_jaw_motion(frame_list, PLACE_CONF, open_width, open_width, "place", n_frames=24)
+    frame_list.append(_frame_from_tasks(task_list, pick_conf_dict, open_width_dict, "pick"))
+    append_dual_jaw_motion(frame_list,
+                           task_list,
+                           pick_conf_dict,
+                           open_width_dict,
+                           closed_width_dict,
+                           "pick")
+    current_conf_dict = {arm_name: conf.copy() for arm_name, conf in pick_conf_dict.items()}
+    for task in task_list:
+        arm_name = task.arm_name
+        static_conf_dict = {
+            other_arm_name: conf
+            for other_arm_name, conf in current_conf_dict.items()
+            if other_arm_name != arm_name
+        }
+        robot.goto_conf_dict(static_conf_dict)
+        other_robot_list = [robot.arm_dict[other_arm_name] for other_arm_name in static_conf_dict]
+        transfer_path = plan_arm_segment(robot.arm_dict[arm_name],
+                                         current_conf_dict[arm_name],
+                                         task.place_conf,
+                                         planning_obstacle_list,
+                                         other_robot_list=other_robot_list)
+        append_dual_path(frame_list,
+                         task_list,
+                         {arm_name: transfer_path},
+                         static_conf_dict=static_conf_dict,
+                         jaw_width_dict=closed_width_dict,
+                         payload_mode="hold")
+        current_conf_dict[arm_name] = task.place_conf
+    append_dual_jaw_motion(frame_list,
+                           task_list,
+                           place_conf_dict,
+                           closed_width_dict,
+                           open_width_dict,
+                           "hold")
+    append_dual_jaw_motion(frame_list,
+                           task_list,
+                           place_conf_dict,
+                           open_width_dict,
+                           open_width_dict,
+                           "place",
+                           n_frames=24)
     return frame_list
+
+
+def apply_frame_state(robot, frame):
+    robot.goto_conf_dict(frame.conf_dict)
+    for arm_name, jaw_width in frame.jaw_width_dict.items():
+        robot.arm_dict[arm_name].change_ee_values(jaw_width)
 
 
 def precompute_robot_meshes(robot, frame_list):
     mesh_list = []
     robot.backup_state()
     for frame in frame_list:
-        robot.goto_given_conf(frame.conf)
-        robot.change_ee_values(frame.jaw_width)
+        apply_frame_state(robot, frame)
         mesh_list.append(robot.gen_meshmodel(alpha=.88, toggle_tcp_frame=True))
     robot.restore_state()
     return mesh_list
 
 
-def update(animation_data, task):
+def update(animation_data, panda_task):
     frame = animation_data.frame_list[animation_data.counter]
     if animation_data.current_robot_mesh is not None:
         animation_data.current_robot_mesh.detach()
     animation_data.current_robot_mesh = animation_data.robot_mesh_list[animation_data.counter]
     animation_data.current_robot_mesh.attach_to(base)
 
-    if frame.payload_mode == "hold":
-        rel_pos, rel_rotmat = animation_data.payload_rel_pose
-        animation_data.robot.goto_given_conf(frame.conf)
-        animation_data.robot.change_ee_values(frame.jaw_width)
-        payload_pos, payload_rotmat = animation_data.robot.arm.cvt_pose_in_tcp_to_gl(rel_pos, rel_rotmat)
-        animation_data.payload.pose = (payload_pos, payload_rotmat)
-    elif frame.payload_mode == "place":
-        animation_data.payload.pose = animation_data.place_pose
-    else:
-        animation_data.payload.pose = animation_data.pick_pose
+    apply_frame_state(animation_data.robot, frame)
+    for object_name, pick_place_task in animation_data.task_dict.items():
+        payload = animation_data.payload_dict[object_name]
+        payload_mode = frame.payload_mode_dict[object_name]
+        if payload_mode == "hold":
+            rel_pos, rel_rotmat = pick_place_task.payload_rel_pose
+            arm = animation_data.robot.arm_dict[pick_place_task.arm_name]
+            payload.pose = arm.cvt_pose_in_tcp_to_gl(rel_pos, rel_rotmat)
+        elif payload_mode == "place":
+            payload.pose = pick_place_task.place_pose
+        else:
+            payload.pose = pick_place_task.pick_pose
 
     if animation_data.counter == len(animation_data.frame_list) - 1:
         animation_data.end_hold_counter += 1
@@ -526,37 +540,52 @@ def update(animation_data, task):
             animation_data.end_hold_counter = 0
     else:
         animation_data.counter += 1
-    return task.again
+    return panda_task.again
 
 
-def main(toggle_visual=True):
+def main(toggle_visual=True,
+         vertical_frame_height=RACK_VERTICAL_FRAME_HEIGHT,
+         horizontal_frame_thickness=RACK_HORIZONTAL_FRAME_THICKNESS,
+         horizontal_frame_x_length=RACK_HORIZONTAL_FRAME_X_LENGTH,
+         horizontal_frame_y_length=RACK_HORIZONTAL_FRAME_Y_LENGTH):
     global base
     base = wd.World(cam_pos=[1.8, 1.6, 1.35], lookat_pos=[0.35, 0.0, 0.95])
     mgm.gen_frame().attach_to(base)
 
-    robot = DualUR7EDH50(enable_cc=True)
-    robot.hndopen()
-
-    demo_spec = OBJECT_SPECS[DEMO_OBJECT_NAME]
-    pick_pose = demo_spec["pose"]
-    place_pose = (demo_spec["place_positions"][0], demo_spec["pose"][1])
-    robot.goto_given_conf(PICK_CONF)
-    payload_rel_pose = robot.arm.cvt_gl_pose_to_tcp(pick_pose[0], pick_pose[1])
+    robot = DualUR7EDH50(enable_cc=True,
+                         body_root_pos=RACK_BASE_POS,
+                         body_root_rotmat=RACK_ROT,
+                         vertical_frame_height=vertical_frame_height,
+                         vertical_frame_xy=RACK_VERTICAL_FRAME_XY,
+                         horizontal_frame_thickness=horizontal_frame_thickness,
+                         horizontal_frame_x_length=horizontal_frame_x_length,
+                         horizontal_frame_y_length=horizontal_frame_y_length,
+                         vertical_frame_rgb=RACK_VERTICAL_FRAME_RGB,
+                         horizontal_frame_rgb=RACK_HORIZONTAL_FRAME_RGB,
+                         vertical_frame_alpha=RACK_VERTICAL_FRAME_ALPHA,
+                         horizontal_frame_alpha=RACK_HORIZONTAL_FRAME_ALPHA,
+                         arm_y_offset=RACK_ARM_Y_OFFSET,
+                         arm_y_offset_reference_frame_y_length=RACK_ARM_Y_OFFSET_REFERENCE_FRAME_Y_LENGTH,
+                         lft_arm_loc_rotmat=RACK_LFT_ARM_LOC_ROTMAT,
+                         rgt_arm_loc_rotmat=RACK_RGT_ARM_LOC_ROTMAT,
+                         lft_home_conf=UR3_DUAL_LFT_HOME_CONF,
+                         rgt_home_conf=UR3_DUAL_RGT_HOME_CONF)
+    robot.lft_arm.hndopen()
+    robot.rgt_arm.hndopen()
 
     obstacle_list, payload_dict = build_inside_scene(base)
-    payload = payload_dict[DEMO_OBJECT_NAME]
-    frame_list = build_frame_list(robot, obstacle_list)
-    print(f"Generated {len(frame_list)} animation frames for UR7E + DH50.")
+    task_list = build_pick_place_tasks(robot, obstacle_list)
+    task_dict = {task.object_name: task for task in task_list}
+    frame_list = build_frame_list(robot, obstacle_list, task_list)
+    print(f"Generated {len(frame_list)} dual-arm pick-and-place frames for UR7E + DH50.")
 
     if toggle_visual:
         robot_mesh_list = precompute_robot_meshes(robot, frame_list)
         animation_data = AnimationData(robot=robot,
                                        robot_mesh_list=robot_mesh_list,
                                        frame_list=frame_list,
-                                       payload=payload,
-                                       pick_pose=pick_pose,
-                                       place_pose=place_pose,
-                                       payload_rel_pose=payload_rel_pose)
+                                       payload_dict=payload_dict,
+                                       task_dict=task_dict)
         taskMgr.doMethodLater(.05,
                               update,
                               "ur7e_dh50_pickandplace_inside_update",

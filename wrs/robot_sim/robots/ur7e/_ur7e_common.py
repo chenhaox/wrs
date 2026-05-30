@@ -79,6 +79,8 @@ class UR7EBase(ri.RobotInterface):
         if arm_home_conf is None:
             arm_home_conf = np.zeros(6)
         self.oih_infos = []
+        self._prefer_tracik = ik_solver in ("t", "tracik", "pytracik")
+        arm_ik_solver = "n" if self._prefer_tracik else ik_solver
         self.iksolver_cache = {}
         self.fixture_list = []
         self.manipulator_dict = {}
@@ -106,7 +108,7 @@ class UR7EBase(ri.RobotInterface):
                                          home_conf=np.asarray(arm_home_conf, dtype=float),
                                          name=name + "_arm",
                                          enable_cc=False,
-                                         ik_solver=ik_solver)
+                                         ik_solver=arm_ik_solver)
         self.manipulator = self.arm
         self.hnd = None
         if hnd_cls is not None:
@@ -222,6 +224,10 @@ class UR7EBase(ri.RobotInterface):
         return self.goto_given_conf(jnt_values)
 
     def ik(self, tgt_pos, tgt_rotmat, seed_jnt_values=None, toggle_dbg=False):
+        if self._prefer_tracik:
+            return self.tracik(tgt_pos=tgt_pos,
+                               tgt_rotmat=tgt_rotmat,
+                               seed_jnt_values=seed_jnt_values)
         return self.arm.ik(tgt_pos=tgt_pos,
                            tgt_rotmat=tgt_rotmat,
                            seed_jnt_values=seed_jnt_values,
@@ -311,6 +317,11 @@ class UR7EBase(ri.RobotInterface):
     def get_tgt_pose_in_rbt(self, tgt_pos, tgt_rotmat):
         return rm.rel_pose(self.arm.pos, self.arm.rotmat, tgt_pos, tgt_rotmat)
 
+    def get_tgt_flange_pose_in_arm_base(self, tgt_tcp_pos, tgt_tcp_rotmat):
+        tgt_flange_rotmat = tgt_tcp_rotmat @ self.arm.loc_tcp_rotmat.T
+        tgt_flange_pos = tgt_tcp_pos - tgt_tcp_rotmat @ self.arm.loc_tcp_pos
+        return self.get_tgt_pose_in_rbt(tgt_flange_pos, tgt_flange_rotmat)
+
     def tracik(self,
                urdf_path: str = os.path.join(os.path.dirname(__file__), "urdf", "ur7e.urdf"),
                base_link_name: str = "base_link",
@@ -323,7 +334,7 @@ class UR7EBase(ri.RobotInterface):
             from trac_ik import TracIK
         except ImportError as exc:
             raise ImportError("trac_ik is not installed in this environment.") from exc
-        rel_pos, rel_rotmat = self.get_tgt_pose_in_rbt(tgt_pos, tgt_rotmat)
+        rel_pos, rel_rotmat = self.get_tgt_flange_pose_in_arm_base(tgt_pos, tgt_rotmat)
         key = (urdf_path, base_link_name, tip_link_name, solver_type)
         if key not in self.iksolver_cache:
             self.iksolver_cache[key] = TracIK(base_link_name=base_link_name,
