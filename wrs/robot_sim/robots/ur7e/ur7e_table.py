@@ -37,7 +37,7 @@ class UR7E(UR7EBase):
 class DualUR7E(UR7EDualBase):
 
     def __init__(self, pos=np.zeros(3), rotmat=np.eye(3), name="dual_ur7e", enable_cc=True):
-        lower_mount_pos = np.array([0.1375, 0.0125, 0.0])
+        lower_mount_pos = np.array([0.6125, 0.5875, 0.0])
         upper_mount_pos = np.array([0.6125, -0.5875, 0.0])
         super().__init__(pos=pos,
                          rotmat=rotmat,
@@ -90,6 +90,12 @@ if __name__ == "__main__":
     base = wd.World(cam_pos=[2, 0, 1], lookat_pos=[0, 0, 0])
     mgm.gen_frame().attach_to(base)
     robot = DualUR7E(enable_cc=True)
+
+    robot.fk("upper_arm", np.array(
+        [np.radians(110), 0, 0, 0, 0, 0]
+    ))
     robot.gen_meshmodel(toggle_flange_frame=True, toggle_jnt_frames=True, alpha=.7).attach_to(base)
+    robot.show_cdprim()
+    robot.is_collided()
     print(robot.is_collided())
     base.run()

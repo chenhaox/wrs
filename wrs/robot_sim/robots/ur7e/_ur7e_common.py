@@ -67,6 +67,9 @@ class UR7EBase(ri.RobotInterface):
                  arm_loc_pos=np.zeros(3),
                  arm_loc_rotmat=np.eye(3),
                  fixture_specs=None,
+                 hnd_cls=None,
+                 hnd_kwargs=None,
+                 hnd_loc_rotmat=np.eye(3),
                  ik_solver=None):
         pos = np.asarray(pos, dtype=float)
         rotmat = np.asarray(rotmat, dtype=float)
@@ -80,6 +83,7 @@ class UR7EBase(ri.RobotInterface):
         self.fixture_list = []
         self.manipulator_dict = {}
         self.hnd_dict = {}
+        self.hnd_loc_rotmat = np.asarray(hnd_loc_rotmat, dtype=float)
         current_dir = os.path.dirname(__file__)
         if fixture_specs is not None:
             for spec in fixture_specs:
@@ -105,14 +109,36 @@ class UR7EBase(ri.RobotInterface):
                                          ik_solver=ik_solver)
         self.manipulator = self.arm
         self.hnd = None
+        if hnd_cls is not None:
+            if hnd_kwargs is None:
+                hnd_kwargs = {}
+            hnd_kwargs = hnd_kwargs.copy()
+            hnd_kwargs.setdefault("name", name + "_hnd")
+            hnd_pos, hnd_rotmat = self._compute_hnd_root_pose()
+            self.hnd = hnd_cls(pos=hnd_pos, rotmat=hnd_rotmat, **hnd_kwargs)
+            self.arm.loc_tcp_pos = self.hnd_loc_rotmat @ self.hnd.loc_acting_center_pos
+            self.arm.loc_tcp_rotmat = self.hnd_loc_rotmat @ self.hnd.loc_acting_center_rotmat
         self._delegator = self.arm
         self.manipulator_dict["arm"] = self.arm
         self.manipulator_dict["hnd"] = self.arm
+        if self.hnd is not None:
+            self.hnd_dict["hnd"] = self.hnd
+            self.hnd_dict["arm"] = self.hnd
         if self.cc is not None:
             self.setup_cc()
 
     def _compute_arm_root_pose(self):
         return self.pos + self.rotmat @ self.arm_loc_pos, self.rotmat @ self.arm_loc_rotmat
+
+    def _compute_hnd_root_pose(self):
+        return self.arm.gl_flange_pos, self.arm.gl_flange_rotmat @ self.hnd_loc_rotmat
+
+    def update_end_effector(self, ee_values=None):
+        if self.hnd is not None:
+            if ee_values is not None:
+                self.hnd.change_ee_values(ee_values=ee_values)
+            hnd_pos, hnd_rotmat = self._compute_hnd_root_pose()
+            self.hnd.fix_to(pos=hnd_pos, rotmat=hnd_rotmat)
 
     @property
     def gl_tcp_pos(self):
@@ -124,14 +150,20 @@ class UR7EBase(ri.RobotInterface):
 
     @property
     def end_effector(self):
-        return None
+        return self.hnd
 
     @property
     def oiee_list(self):
-        return []
+        if self.hnd is None:
+            return []
+        return self.hnd.oiee_list
 
     def setup_cc(self):
         fixture_ids = [self.cc.add_cce(fixture.lnk) for fixture in self.fixture_list]
+        ee_cces = []
+        if self.hnd is not None:
+            for cdlnk in self.hnd.cdelements:
+                ee_cces.append(self.cc.add_cce(cdlnk))
         mlb = self.cc.add_cce(self.arm.jlc.anchor.lnk_list[0])
         ml0 = self.cc.add_cce(self.arm.jlc.jnts[0].lnk)
         ml1 = self.cc.add_cce(self.arm.jlc.jnts[1].lnk)
@@ -139,12 +171,16 @@ class UR7EBase(ri.RobotInterface):
         ml3 = self.cc.add_cce(self.arm.jlc.jnts[3].lnk)
         ml4 = self.cc.add_cce(self.arm.jlc.jnts[4].lnk)
         ml5 = self.cc.add_cce(self.arm.jlc.jnts[5].lnk)
-        self.cc.set_cdpair_by_ids([ml3, ml4, ml5], [mlb, ml0])
+        self.cc.set_cdpair_by_ids(ee_cces + [ml3, ml4, ml5], [mlb, ml0])
+        self.cc.set_cdpair_by_ids([ml3, ml4, ml5], [ml1])
         self.cc.set_cdpair_by_ids([ml5], [ml1, ml2])
+        if ee_cces:
+            self.cc.set_cdpair_by_ids(ee_cces, [ml1, ml2])
         if fixture_ids:
-            self.cc.set_cdpair_by_ids([ml1, ml2, ml3, ml4, ml5], fixture_ids)
-        self.cc.enable_extcd_by_id_list([ml0, ml1, ml2, ml3, ml4, ml5], type="from")
+            self.cc.set_cdpair_by_ids(ee_cces + [ml1, ml2, ml3, ml4, ml5], fixture_ids)
+        self.cc.enable_extcd_by_id_list(ee_cces + [ml0, ml1, ml2, ml3, ml4, ml5], type="from")
         self.cc.enable_innercd_by_id_list([mlb, ml0, ml1, ml2], type="into")
+        self.cc.dynamic_ext_list = ee_cces[1:]
 
     def reset_cc(self):
         self.cc = cc.CollisionChecker("collision_checker")
@@ -152,9 +188,14 @@ class UR7EBase(ri.RobotInterface):
 
     def backup_state(self):
         self.arm.backup_state()
+        if self.hnd is not None:
+            self.hnd.backup_state()
 
     def restore_state(self):
         self.arm.restore_state()
+        self.update_end_effector()
+        if self.hnd is not None:
+            self.hnd.restore_state()
 
     def fix_to(self, pos, rotmat):
         self._pos = np.asarray(pos, dtype=float)
@@ -163,10 +204,12 @@ class UR7EBase(ri.RobotInterface):
             fixture.fix_to(self.pos, self.rotmat)
         arm_pos, arm_rotmat = self._compute_arm_root_pose()
         self.arm.fix_to(pos=arm_pos, rotmat=arm_rotmat)
+        self.update_end_effector()
         self._update_oih()
 
     def goto_given_conf(self, jnt_values):
         result = self.arm.goto_given_conf(jnt_values=np.asarray(jnt_values, dtype=float))
+        self.update_end_effector()
         self._update_oih()
         return result
 
@@ -198,21 +241,38 @@ class UR7EBase(ri.RobotInterface):
         return self.arm.are_jnts_in_ranges(jnt_values=np.asarray(jnt_values, dtype=float))
 
     def get_ee_values(self):
+        if self.hnd is not None:
+            return self.hnd.get_ee_values()
         return None
 
     def change_ee_values(self, ee_values):
-        pass
+        if self.hnd is not None:
+            self.hnd.change_ee_values(ee_values=ee_values)
 
     def jaw_to(self, hand_name="hnd", jawwidth=0.0):
+        if self.hnd is not None:
+            self.hnd.change_jaw_width(jaw_width=jawwidth)
         self.jaw_width = jawwidth
 
     def hndclose(self):
         self.jaw_to(jawwidth=0.0)
 
     def hndopen(self):
-        self.jaw_to(jawwidth=0.076)
+        if self.hnd is not None:
+            self.jaw_to(jawwidth=self.hnd.jaw_range[1])
+        else:
+            self.jaw_to(jawwidth=0.076)
 
     def hold(self, hnd_name, objcm, jawwidth=None):
+        if self.hnd is not None:
+            rel_pos, rel_rotmat = self.arm.cvt_gl_pose_to_tcp(objcm.pos, objcm.rotmat)
+            oiee = self.hnd.hold(obj_cmodel=objcm, jaw_width=jawwidth)
+            if self.cc is not None:
+                uuid = self.cc.add_cce(oiee)
+                self.cc.enable_extcd_by_id_list(id_list=[uuid], type="from")
+                self.cc.enable_innercd_by_id_list(id_list=[uuid], type="from")
+                self.cc.dynamic_ext_list.append(uuid)
+            return rel_pos, rel_rotmat
         rel_pos, rel_rotmat = self.arm.cvt_gl_pose_to_tcp(objcm.pos, objcm.rotmat)
         self.oih_infos.append({
             "collision_model": objcm,
@@ -224,6 +284,11 @@ class UR7EBase(ri.RobotInterface):
         return rel_pos, rel_rotmat
 
     def release(self, hnd_name, objcm, jawwidth=None):
+        if self.hnd is not None:
+            oiee = self.hnd.release(obj_cmodel=objcm, jaw_width=jawwidth)
+            if oiee is not None and self.cc is not None:
+                self.cc.remove_cce(oiee)
+            return
         for obj_info in list(self.oih_infos):
             if obj_info["collision_model"] is objcm:
                 self.oih_infos.remove(obj_info)
@@ -237,6 +302,9 @@ class UR7EBase(ri.RobotInterface):
             obj_info["collision_model"].pose = (gl_pos, gl_rotmat)
 
     def get_oih_list(self):
+        if self.hnd is not None:
+            self.hnd.update_oiee()
+            return [oiee.cmodel for oiee in self.hnd.oiee_list]
         self._update_oih()
         return [obj_info["collision_model"] for obj_info in self.oih_infos]
 
@@ -278,6 +346,9 @@ class UR7EBase(ri.RobotInterface):
         self.arm.gen_stickmodel(toggle_tcp_frame=toggle_tcp_frame,
                                 toggle_jnt_frames=toggle_jnt_frames,
                                 toggle_flange_frame=toggle_flange_frame).attach_to(m_col)
+        if self.hnd is not None:
+            self.hnd.gen_stickmodel(toggle_tcp_frame=toggle_tcp_frame,
+                                    toggle_jnt_frames=toggle_jnt_frames).attach_to(m_col)
         return m_col
 
     def gen_meshmodel(self,
@@ -303,6 +374,13 @@ class UR7EBase(ri.RobotInterface):
                                toggle_flange_frame=toggle_flange_frame,
                                toggle_cdprim=toggle_cdprim,
                                toggle_cdmesh=toggle_cdmesh).attach_to(m_col)
+        if self.hnd is not None:
+            self.hnd.gen_meshmodel(rgb=rgb,
+                                   alpha=alpha,
+                                   toggle_tcp_frame=toggle_tcp_frame,
+                                   toggle_jnt_frames=toggle_jnt_frames,
+                                   toggle_cdprim=toggle_cdprim,
+                                   toggle_cdmesh=toggle_cdmesh).attach_to(m_col)
         return m_col
 
 

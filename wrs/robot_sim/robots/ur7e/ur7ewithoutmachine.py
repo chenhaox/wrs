@@ -1,19 +1,23 @@
 import numpy as np
 
 import wrs.basis.robot_math as rm
+from wrs.robot_sim.end_effectors.grippers.dh50.dh50 import Dh50
 from wrs.robot_sim.robots.ur7e._ur7e_common import UR7EBase
 
 
 class UR7E(UR7EBase):
 
-    def __init__(self, pos=np.zeros(3), rotmat=np.eye(3), name="ur7e", enable_cc=True):
+    def __init__(self, pos=np.zeros(3), rotmat=np.eye(3), name="ur7e", enable_cc=True, ik_solver=None):
         super().__init__(pos=pos,
                          rotmat=rotmat,
                          name=name,
                          enable_cc=enable_cc,
                          arm_home_conf=np.array([0, -rm.pi / 2, rm.pi / 2, -rm.pi / 2, 0, 0]),
                          arm_loc_pos=np.array([0.7, 0.2, 0.7]),
-                         arm_loc_rotmat=rm.rotmat_from_axangle(rm.const.z_ax, rm.pi))
+                         arm_loc_rotmat=rm.rotmat_from_axangle(rm.const.z_ax, rm.pi),
+                         hnd_cls=Dh50,
+                         hnd_loc_rotmat=rm.rotmat_from_axangle(rm.const.z_ax, rm.pi / 2),
+                         ik_solver=ik_solver)
 
 
 if __name__ == "__main__":

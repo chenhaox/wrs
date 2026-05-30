@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+from panda3d.core import CollisionBox, CollisionNode, NodePath, Point3
 
 import wrs.basis.robot_math as rm
 import wrs.modeling.collision_model as mcm
@@ -41,14 +42,56 @@ class UR7E(mi.ManipulatorInterface):
             self.setup_cc()
 
     @staticmethod
-    def _make_cmodel(current_file_dir, mesh_name, name, rgba):
+    def _make_cmodel(current_file_dir, mesh_name, name, rgba,
+                     cdprim_type=mcm.const.CDPrimType.SURFACE_BALLS,
+                     userdef_cdprim_fn=None,
+                     ex_radius=.01):
         cmodel = mcm.CollisionModel(
             initor=os.path.join(current_file_dir, "meshes", mesh_name),
             name=name,
-            cdprim_type=mcm.const.CDPrimType.SURFACE_BALLS,
-            ex_radius=.01)
+            cdprim_type=cdprim_type,
+            userdef_cdprim_fn=userdef_cdprim_fn,
+            ex_radius=ex_radius)
         cmodel.rgba = np.array(rgba)
         return cmodel
+
+    @staticmethod
+    def _upperarm_cdprim(name="ur7e_upperarm", ex_radius=None):
+        pdcnd = CollisionNode(name + "_cnode")
+        pdcnd.addSolid(CollisionBox(Point3(0.0, 0.003, 0.01),
+                                    x=0.06 + ex_radius,
+                                    y=0.07 + ex_radius,
+                                    z=0.07 + ex_radius))
+        pdcnd.addSolid(CollisionBox(Point3(0.0, 0.0, 0.25),
+                                    x=0.042 + ex_radius,
+                                    y=0.042 + ex_radius,
+                                    z=0.18 + ex_radius))
+        pdcnd.addSolid(CollisionBox(Point3(0.0, 0.003, 0.411),
+                                    x=0.06 + ex_radius,
+                                    y=0.07 + ex_radius,
+                                    z=0.073 + ex_radius))
+        cdprim = NodePath(name + "_cdprim")
+        cdprim.attachNewNode(pdcnd)
+        return cdprim
+
+    @staticmethod
+    def _forearm_cdprim(name="ur7e_forearm", ex_radius=None):
+        pdcnd = CollisionNode(name + "_cnode")
+        pdcnd.addSolid(CollisionBox(Point3(0.0, 0.003, 0.01),
+                                    x=0.057 + ex_radius,
+                                    y=0.051 + ex_radius,
+                                    z=0.07 + ex_radius))
+        pdcnd.addSolid(CollisionBox(Point3(0.0, 0.0, 0.215),
+                                    x=0.039 + ex_radius,
+                                    y=0.039 + ex_radius,
+                                    z=0.135 + ex_radius))
+        pdcnd.addSolid(CollisionBox(Point3(0.0, 0.003, 0.39),
+                                    x=0.038 + ex_radius,
+                                    y=0.061 + ex_radius,
+                                    z=0.041 + ex_radius))
+        cdprim = NodePath(name + "_cdprim")
+        cdprim.attachNewNode(pdcnd)
+        return cdprim
 
     def _setup_chain(self, current_file_dir):
         # anchor/base
@@ -76,7 +119,10 @@ class UR7E(mi.ManipulatorInterface):
         self.jlc.jnts[1].lnk.com = np.array([.13, 0, .1157])
         self.jlc.jnts[1].lnk.mass = 3.42
         self.jlc.jnts[1].lnk.cmodel = self._make_cmodel(
-            current_file_dir, "upperarm.dae", "ur7e_upperarm", [.7, .7, .7, .3])
+            current_file_dir, "upperarm.dae", "ur7e_upperarm", [.7, .7, .7, .3],
+            cdprim_type=mcm.const.CDPrimType.USER_DEFINED,
+            userdef_cdprim_fn=self._upperarm_cdprim,
+            ex_radius=.001)
 
         # third joint and forearm link
         self.jlc.jnts[2].loc_pos = np.array([0, -.131, .425])
@@ -86,7 +132,10 @@ class UR7E(mi.ManipulatorInterface):
         self.jlc.jnts[2].lnk.com = np.array([.05, .0, .0238])
         self.jlc.jnts[2].lnk.mass = 1.437
         self.jlc.jnts[2].lnk.cmodel = self._make_cmodel(
-            current_file_dir, "forearm.dae", "ur7e_forearm", [.35, .35, .35, .3])
+            current_file_dir, "forearm.dae", "ur7e_forearm", [.35, .35, .35, .3],
+            cdprim_type=mcm.const.CDPrimType.USER_DEFINED,
+            userdef_cdprim_fn=self._forearm_cdprim,
+            ex_radius=.001)
 
         # fourth joint and wrist1 link
         self.jlc.jnts[3].loc_pos = np.array([.0, .0, 0.392])
@@ -131,6 +180,7 @@ class UR7E(mi.ManipulatorInterface):
         l4 = self.cc.add_cce(self.jlc.jnts[4].lnk)
         l5 = self.cc.add_cce(self.jlc.jnts[5].lnk)
         self.cc.set_cdpair_by_ids([l3, l4, l5], [lb, l0])
+        self.cc.set_cdpair_by_ids([l3, l4, l5], [l1])
         self.cc.set_cdpair_by_ids([l5], [l1, l2])
 
 
