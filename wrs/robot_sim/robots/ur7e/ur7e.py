@@ -1,12 +1,13 @@
 import numpy as np
 
 import wrs.basis.robot_math as rm
+from wrs.robot_sim.end_effectors.grippers.dh50.dh50 import Dh50
 from wrs.robot_sim.robots.ur7e._ur7e_common import UR7EBase
 
 
 class UR7E(UR7EBase):
 
-    def __init__(self, pos=np.zeros(3), rotmat=np.eye(3), name="ur7e", enable_cc=True):
+    def __init__(self, pos=np.zeros(3), rotmat=np.eye(3), name="ur7e", enable_cc=True, ik_solver=None):
         super().__init__(pos=pos,
                          rotmat=rotmat,
                          name=name,
@@ -21,7 +22,10 @@ class UR7E(UR7EBase):
                                  "loc_pos": np.array([0.4, 0.1, 0.5]),
                                  "rgba": rm.const.steel_gray,
                              }
-                         ])
+                         ],
+                         hnd_cls=Dh50,
+                         hnd_loc_rotmat=rm.rotmat_from_axangle(rm.const.z_ax, rm.pi / 2),
+                         ik_solver=ik_solver)
 
 
 if __name__ == "__main__":
@@ -31,5 +35,6 @@ if __name__ == "__main__":
     mgm.gen_frame().attach_to(base)
     robot = UR7E(enable_cc=True)
     robot.gen_meshmodel(toggle_flange_frame=True, toggle_jnt_frames=True, alpha=.7).attach_to(base)
+    robot.show_cdprim()
     print(robot.is_collided())
     base.run()
