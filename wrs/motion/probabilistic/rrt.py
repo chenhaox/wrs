@@ -25,6 +25,8 @@ class RRT(object):
         self.goal_conf = None
         # define data type
         self.toggle_keep = True
+        self.conf_constraint_fn = None
+        self.last_state_validity_reason = "ok"
 
     @staticmethod
     def keep_states_decorator(method):
@@ -69,6 +71,11 @@ class RRT(object):
         """
         if self.robot.are_jnts_in_ranges(jnt_values=conf):
             self.robot.goto_given_conf(jnt_values=conf)
+            if self.conf_constraint_fn is not None and not self.conf_constraint_fn(self.robot, conf):
+                self.last_state_validity_reason = "constraint"
+                if toggle_dbg:
+                    print("RRT: The configuration violates the configured constraint.")
+                return (True, []) if toggle_contacts else True
             # # toggle off the following code to consider object pose constraints
             # if len(self.robot.oiee_list)>0:
             #     angle = rm.angle_between_vectors(self.robot.oiee_list[-1].gl_rotmat[:,2], np.array([0,0,1]))
@@ -77,6 +84,10 @@ class RRT(object):
             collision_info = self.robot.is_collided(obstacle_list=obstacle_list, other_robot_list=other_robot_list,
                                                     toggle_contacts=toggle_contacts,
                                                     toggle_dbg=toggle_dbg)
+            if isinstance(collision_info, tuple):
+                self.last_state_validity_reason = "collision" if collision_info[0] else "ok"
+            else:
+                self.last_state_validity_reason = "collision" if collision_info else "ok"
             # if toggle_contacts:
             #     if collision_info[0]:
             #         for pnt in collision_info[1]:
@@ -90,6 +101,7 @@ class RRT(object):
             #         base.run()
             return collision_info
         else:
+            self.last_state_validity_reason = "out_of_range"
             print("The given joint angles are out of joint limits.")
             return (True, []) if toggle_contacts else True
 
@@ -131,23 +143,23 @@ class RRT(object):
         :param exact_end:
         :return: a list of 1xn nparray
         """
-        len, vec = rm.unit_vector(end_conf - src_conf, toggle_length=True)
+        length, vec = rm.unit_vector(end_conf - src_conf, toggle_length=True)
+        if length < 1e-9:
+            return [np.asarray(src_conf, dtype=float)]
+        if ext_dist <= 0:
+            raise ValueError("ext_dist must be positive.")
         # ===============
         # one step extension: not used because it is slower than full extensions
         # ***** date: 20210523, correspondent: weiwei *****
         # return [src_conf + ext_dist * vec]
         # switch to the following code for ful extensions
         # ===============
-        if not exact_end:
-            nval = math.ceil(len / ext_dist)
-            nval = 1 if nval == 0 else nval  # at least include itself
-            conf_array = np.linspace(src_conf, src_conf + nval * ext_dist * vec, nval)
-        else:
-            nval = math.floor(len / ext_dist)
-            nval = 1 if nval == 0 else nval  # at least include itself
-            conf_array = np.linspace(src_conf, src_conf + nval * ext_dist * vec, nval)
-            conf_array = np.vstack((conf_array, end_conf))
-        return list(conf_array)
+        if exact_end:
+            n_steps = max(int(math.ceil(length / ext_dist)), 1)
+            return [src_conf + (end_conf - src_conf) * i / n_steps for i in range(n_steps + 1)]
+        n_steps = max(int(math.floor(length / ext_dist)), 1)
+        distances = [min(i * ext_dist, length) for i in range(n_steps + 1)]
+        return [src_conf + distance * vec for distance in distances]
 
     def _extend_roadmap(self,
                         roadmap,
@@ -214,9 +226,9 @@ class RRT(object):
                 continue
             if j < i:
                 i, j = j, i
-            exact_end = True if j == len(smoothed_path) - 1 else False
+            shortcut_reaches_path_end = j == len(smoothed_path) - 1
             shortcut = self._extend_conf(src_conf=smoothed_path[i], end_conf=smoothed_path[j], ext_dist=granularity,
-                                         exact_end=exact_end)
+                                         exact_end=True)
             if all(not self._is_collided(conf=conf,
                                          obstacle_list=obstacle_list,
                                          other_robot_list=other_robot_list)
@@ -225,7 +237,7 @@ class RRT(object):
             if animation:
                 self.draw_wspace([self.roadmap], self.start_conf, self.goal_conf,
                                  obstacle_list, shortcut=shortcut, smoothed_path=smoothed_path)
-            if i == 0 and exact_end:  # stop smoothing when shortcut was between start and end
+            if i == 0 and shortcut_reaches_path_end:  # stop smoothing when shortcut was between start and end
                 break
         return smoothed_path
 
@@ -241,7 +253,8 @@ class RRT(object):
              max_time=15.0,
              smoothing_n_iter=50,
              animation=False,
-             toggle_dbg=True):
+             toggle_dbg=True,
+             conf_constraint_fn=None):
         """
         :return: [path, all_sampled_confs]
         author: weiwei
@@ -250,16 +263,17 @@ class RRT(object):
         self.roadmap.clear()
         self.start_conf = start_conf
         self.goal_conf = goal_conf
+        self.conf_constraint_fn = conf_constraint_fn
         # check start_conf and end_conf
         if toggle_dbg:
             print("RRT: Checking start robot configuration...")
         if self._is_collided(start_conf, obstacle_list, other_robot_list, toggle_dbg=toggle_dbg):
-            print("The start robot configuration is in collision!")
+            print(f"The start robot configuration is invalid ({self.last_state_validity_reason})!")
             return None
         if toggle_dbg:
             print("RRT: Checking goal robot configuration...")
         if self._is_collided(goal_conf, obstacle_list, other_robot_list, toggle_dbg=toggle_dbg):
-            print("The goal robot configuration is in collision!")
+            print(f"The goal robot configuration is invalid ({self.last_state_validity_reason})!")
             return None
         if self._is_goal_reached(conf=start_conf, goal_conf=goal_conf, threshold=ext_dist):
             mot_data = motd.MotionData(self.robot)

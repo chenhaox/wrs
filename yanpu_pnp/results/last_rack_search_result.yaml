@@ -1,0 +1,32 @@
+version: 1
+source:
+  base_config: yanpu_pnp/config/default.yaml
+  search_config: yanpu_pnp/config/rack_search.yaml
+search:
+  candidate_index: 164
+  completed_candidates: 191
+  score: 8.301
+  frame_count: null
+  elapsed: 207.65
+  worker_elapsed: 43.47
+  plan_motion: false
+  workers: 8
+  start_index: 1
+  max_candidates: null
+candidate:
+  rack_base_pos: [0.8, 0.3, 0.6]
+  rack_yaw_deg: 45.0
+  arm_distance: 0.21
+  left_arm_mount_euler_deg: [-30.0, 0.0, 30.0]
+one_pickplace:
+  lft_arm:
+    pick_index: 0
+    place_index: 0
+    grasp_index: null
+  rgt_arm:
+    pick_index: 0
+    place_index: 0
+    grasp_index: null
+task_overrides:
+  pick_symmetry_angle_count: 4
+  place_symmetry_angle_count: 4

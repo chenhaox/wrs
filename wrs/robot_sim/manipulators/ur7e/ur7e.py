@@ -5,7 +5,13 @@ from panda3d.core import CollisionBox, CollisionNode, NodePath, Point3
 
 import wrs.basis.robot_math as rm
 import wrs.modeling.collision_model as mcm
+import wrs.robot_sim._kinematics.jlchain as rkjlc
 import wrs.robot_sim.manipulators.manipulator_interface as mi
+
+try:
+    from wrs_jlchain_native import JLChain as NativeJLChain
+except ImportError:
+    NativeJLChain = None
 
 
 def rotmat_to_axangle(rotmat):
@@ -26,20 +32,41 @@ class UR7E(mi.ManipulatorInterface):
                  name='ur7e',
                  enable_cc=False,
                  ik_solver=None,
-                 homeconf=None):
+                 homeconf=None,
+                 jlchain_backend=None):
         if homeconf is not None:
             home_conf = homeconf
         if home_conf is None:
             home_conf = np.zeros(6)
         home_conf = np.asarray(home_conf, dtype=float)
         super().__init__(pos=pos, rotmat=rotmat, home_conf=home_conf, name=name, enable_cc=enable_cc)
+        self.jlc = self._make_jlchain(pos=pos,
+                                      rotmat=rotmat,
+                                      home_conf=home_conf,
+                                      name=name,
+                                      backend_name=jlchain_backend)
         current_file_dir = os.path.dirname(__file__)
         self._setup_chain(current_file_dir=current_file_dir)
         self.jlc.finalize(ik_solver=ik_solver, identifier_str=name)
+        self.jlchain_backend_name = getattr(self.jlc, "backend_name", None) or "python"
         self.loc_tcp_pos = np.zeros(3)
         self.loc_tcp_rotmat = np.eye(3)
         if self.cc is not None:
             self.setup_cc()
+
+    @staticmethod
+    def _make_jlchain(pos, rotmat, home_conf, name, backend_name=None):
+        jlc_cls = NativeJLChain if NativeJLChain is not None else rkjlc.JLChain
+        if jlc_cls is NativeJLChain:
+            jlc = jlc_cls(pos=pos,
+                          rotmat=rotmat,
+                          n_dof=len(home_conf),
+                          name=name,
+                          backend_name=backend_name)
+        else:
+            jlc = jlc_cls(pos=pos, rotmat=rotmat, n_dof=len(home_conf), name=name)
+        jlc.home = home_conf
+        return jlc
 
     @staticmethod
     def _make_cmodel(current_file_dir, mesh_name, name, rgba,

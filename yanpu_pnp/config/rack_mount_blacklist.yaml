@@ -1,0 +1,36 @@
+mount_groups:
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-90.0, 0.0, 0.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-90.0, 0.0, 45.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-90.0, 0.0, 60.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-90.0, 0.0, 90.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-60.0, 0.0, 30.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-60.0, 0.0, 60.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-60.0, 0.0, 90.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-45.0, 0.0, 30.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-45.0, 0.0, 45.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-45.0, 0.0, 60.0]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [ -45.0, 0.0, 60.0 ]
+
+  - arm_distance: 0.12
+    left_arm_mount_euler_deg: [-45.0, 0.0, 90.0]

@@ -124,7 +124,7 @@ class CollisionChecker(object):
         self.cd_trav = CollisionTraverser()
         self.cd_handler = CollisionHandlerQueue()
         self.cd_pdndp = NodePath(name)  # path of the traverse tree
-        self.bitmask_pool = mph.bitmask_pool
+        self.bitmask_pool = mph.bitmask_pool.copy()
         self.bitmask_users_dict = {}
         for bitmask in self.bitmask_pool:
             self.bitmask_users_dict[bitmask] = []

@@ -58,22 +58,24 @@ class RRTConnect(rrt.RRT):
              max_time=15.0,
              smoothing_n_iter=500,
              animation=False,
-             toggle_dbg=False):
+             toggle_dbg=False,
+             conf_constraint_fn=None):
         self.roadmap.clear()
         self.roadmap_start.clear()
         self.roadmap_goal.clear()
         self.start_conf = start_conf
         self.goal_conf = goal_conf
+        self.conf_constraint_fn = conf_constraint_fn
         # check start and goal
         if toggle_dbg:
             print("RRT: Checking start robot configuration...")
         if self._is_collided(start_conf, obstacle_list, other_robot_list, toggle_dbg=toggle_dbg):
-            print("RRT: The start robot configuration is in collision!")
+            print(f"RRT: The start robot configuration is invalid ({self.last_state_validity_reason})!")
             return None
         if toggle_dbg:
             print("RRT: Checking goal robot configuration...")
         if self._is_collided(goal_conf, obstacle_list, other_robot_list, toggle_dbg=toggle_dbg):
-            print("RRT: The goal robot configuration is in collision!")
+            print(f"RRT: The goal robot configuration is invalid ({self.last_state_validity_reason})!")
             return None
         if self._is_goal_reached(conf=start_conf, goal_conf=goal_conf, threshold=ext_dist):
             mot_data = rrt.motd.MotionData(self.robot)

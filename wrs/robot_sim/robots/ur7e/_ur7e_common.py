@@ -11,6 +11,20 @@ import wrs.robot_sim._kinematics.collision_checker as cc
 import wrs.robot_sim.manipulators.ur7e.ur7e as ur7e_manipulator
 import wrs.robot_sim.robots.robot_interface as ri
 
+try:
+    from trac_ik import TracIK
+    TRACIK_IMPORT_ERROR = None
+except ImportError as exc:
+    TracIK = None
+    TRACIK_IMPORT_ERROR = exc
+
+try:
+    import pyikfast
+    PYIKFAST_IMPORT_ERROR = None
+except ImportError as exc:
+    pyikfast = None
+    PYIKFAST_IMPORT_ERROR = exc
+
 
 class StaticFixture:
     """A fixed collision/display link mounted relative to a robot root pose."""
@@ -79,8 +93,10 @@ class UR7EBase(ri.RobotInterface):
         if arm_home_conf is None:
             arm_home_conf = np.zeros(6)
         self.oih_infos = []
-        self._prefer_tracik = ik_solver in ("t", "tracik", "pytracik")
-        arm_ik_solver = "n" if self._prefer_tracik else ik_solver
+        self.ik_backend_name = None if ik_solver is None else str(ik_solver).strip().lower()
+        self._prefer_tracik = self.ik_backend_name in ("t", "tracik", "pytracik")
+        self._prefer_ikfast = self.ik_backend_name in ("fast", "ikfast", "pyikfast")
+        arm_ik_solver = "n" if self._prefer_tracik or self._prefer_ikfast else ik_solver
         self.iksolver_cache = {}
         self.fixture_list = []
         self.manipulator_dict = {}
@@ -151,6 +167,14 @@ class UR7EBase(ri.RobotInterface):
         return self.arm.gl_tcp_rotmat
 
     @property
+    def home_conf(self):
+        return self.arm.home_conf
+
+    @property
+    def jnt_ranges(self):
+        return self.arm.jnt_ranges
+
+    @property
     def end_effector(self):
         return self.hnd
 
@@ -209,7 +233,11 @@ class UR7EBase(ri.RobotInterface):
         self.update_end_effector()
         self._update_oih()
 
-    def goto_given_conf(self, jnt_values):
+    def goto_given_conf(self, jnt_values=None, **kwargs):
+        if jnt_values is None:
+            jnt_values = kwargs.get("jnt_values", None)
+        if jnt_values is None:
+            raise ValueError("jnt_values must be provided.")
         result = self.arm.goto_given_conf(jnt_values=np.asarray(jnt_values, dtype=float))
         self.update_end_effector()
         self._update_oih()
@@ -228,10 +256,35 @@ class UR7EBase(ri.RobotInterface):
             return self.tracik(tgt_pos=tgt_pos,
                                tgt_rotmat=tgt_rotmat,
                                seed_jnt_values=seed_jnt_values)
+        if self._prefer_ikfast:
+            conf_list = self.ik_all(tgt_pos=tgt_pos,
+                                    tgt_rotmat=tgt_rotmat,
+                                    seed_jnt_values=seed_jnt_values,
+                                    toggle_dbg=toggle_dbg)
+            if not conf_list:
+                return None
+            return conf_list[0]
         return self.arm.ik(tgt_pos=tgt_pos,
                            tgt_rotmat=tgt_rotmat,
                            seed_jnt_values=seed_jnt_values,
                            toggle_dbg=toggle_dbg)
+
+    def ik_all(self, tgt_pos, tgt_rotmat, seed_jnt_values=None, toggle_dbg=False):
+        if self._prefer_ikfast:
+            return self.pyikfast(tgt_pos=tgt_pos,
+                                 tgt_rotmat=tgt_rotmat,
+                                 seed_jnt_values=seed_jnt_values)
+        if self._prefer_tracik:
+            conf = self.tracik(tgt_pos=tgt_pos,
+                               tgt_rotmat=tgt_rotmat,
+                               seed_jnt_values=seed_jnt_values)
+            return [] if conf is None else [np.asarray(conf, dtype=float)]
+        result = self.arm.ik(tgt_pos=tgt_pos,
+                             tgt_rotmat=tgt_rotmat,
+                             seed_jnt_values=seed_jnt_values,
+                             option="multiple",
+                             toggle_dbg=toggle_dbg)
+        return self._normalize_ik_solution_list(result, seed_jnt_values=seed_jnt_values)
 
     def get_jnt_values(self, component_name="arm"):
         if component_name not in self.manipulator_dict:
@@ -243,7 +296,11 @@ class UR7EBase(ri.RobotInterface):
             raise ValueError("The given component name is not supported.")
         return self.arm.rand_conf()
 
-    def are_jnts_in_ranges(self, jnt_values):
+    def are_jnts_in_ranges(self, jnt_values=None, **kwargs):
+        if jnt_values is None:
+            jnt_values = kwargs.get("jnt_values", None)
+        if jnt_values is None:
+            raise ValueError("jnt_values must be provided.")
         return self.arm.are_jnts_in_ranges(jnt_values=np.asarray(jnt_values, dtype=float))
 
     def get_ee_values(self):
@@ -329,21 +386,74 @@ class UR7EBase(ri.RobotInterface):
                tgt_pos=np.zeros(3),
                tgt_rotmat=np.eye(3),
                seed_jnt_values=None,
-               solver_type: Literal["Speed", "Distance", "Manip1", "Manip2"] = "Manip2"):
-        try:
-            from trac_ik import TracIK
-        except ImportError as exc:
-            raise ImportError("trac_ik is not installed in this environment.") from exc
+               solver_type: Literal["Speed", "Distance", "Manip1", "Manip2"] = "Distance"):
+        if TracIK is None:
+            raise ImportError("trac_ik is not installed or failed to load in this environment.") from TRACIK_IMPORT_ERROR
         rel_pos, rel_rotmat = self.get_tgt_flange_pose_in_arm_base(tgt_pos, tgt_rotmat)
         key = (urdf_path, base_link_name, tip_link_name, solver_type)
         if key not in self.iksolver_cache:
             self.iksolver_cache[key] = TracIK(base_link_name=base_link_name,
                                               tip_link_name=tip_link_name,
                                               urdf_path=urdf_path,
-                                              solver_type=solver_type)
+                                              solver_type=solver_type,
+                                              timeout=.01)
         if seed_jnt_values is None:
             seed_jnt_values = self.arm.home_conf
         return self.iksolver_cache[key].ik(rel_pos, rel_rotmat, seed_jnt_values)
+
+    def pyikfast(self, tgt_pos, tgt_rotmat, seed_jnt_values=None):
+        if pyikfast is None:
+            raise ImportError("pyikfast is not installed or failed to load in this environment.") from PYIKFAST_IMPORT_ERROR
+        rel_pos, rel_rotmat = self.get_tgt_flange_pose_in_arm_base(tgt_pos, tgt_rotmat)
+        result = pyikfast.inverse(rel_pos.tolist(), rel_rotmat.reshape(-1).tolist())
+        return self._normalize_ik_solution_list(result, seed_jnt_values=seed_jnt_values)
+
+    def _normalize_ik_solution_list(self, result, seed_jnt_values=None, duplicate_tol=1e-5):
+        if result is None:
+            return []
+        if isinstance(result, (int, float, np.integer, np.floating)) and result == 0:
+            return []
+        try:
+            if len(result) == 0:
+                return []
+        except TypeError:
+            return []
+        seed = self.arm.home_conf if seed_jnt_values is None else np.asarray(seed_jnt_values, dtype=float)
+        raw_array = np.asarray(result, dtype=float)
+        if raw_array.ndim == 1:
+            if raw_array.size != self.arm.n_dof:
+                return []
+            raw_list = [raw_array]
+        elif raw_array.ndim == 2:
+            raw_list = [row for row in raw_array if row.size == self.arm.n_dof]
+        else:
+            raw_list = []
+            for item in result:
+                item_array = np.asarray(item, dtype=float)
+                if item_array.ndim == 1 and item_array.size == self.arm.n_dof:
+                    raw_list.append(item_array)
+        conf_list = []
+        for raw_conf in raw_list:
+            conf = self._nearest_joint_equivalent(raw_conf, seed)
+            if not self.are_jnts_in_ranges(conf):
+                continue
+            if any(np.linalg.norm(conf - existing_conf) <= duplicate_tol for existing_conf in conf_list):
+                continue
+            conf_list.append(conf)
+        conf_list.sort(key=lambda conf: np.linalg.norm(conf - seed))
+        return conf_list
+
+    def _nearest_joint_equivalent(self, jnt_values, reference):
+        jnt_values = np.asarray(jnt_values, dtype=float).copy()
+        reference = np.asarray(reference, dtype=float)
+        jnt_ranges = self.arm.jnt_ranges
+        for i, value in enumerate(jnt_values):
+            candidates = value + 2.0 * np.pi * np.arange(-2, 3)
+            in_range = candidates[(candidates >= jnt_ranges[i, 0]) & (candidates <= jnt_ranges[i, 1])]
+            if len(in_range) > 0:
+                candidates = in_range
+            jnt_values[i] = candidates[np.argmin(np.abs(candidates - reference[i]))]
+        return jnt_values
 
     def gen_stickmodel(self,
                        toggle_tcp_frame=False,
