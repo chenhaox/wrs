@@ -55,10 +55,16 @@ class HandoverPlanner(object):
         :return:
         """
         # connect start and goal to sender and receiver graphs respectively
-        start_node_list = self.sender_fsreg_planner.add_start_pose(obj_pose=start_pose)
-        goal_node_list = self.sender_fsreg_planner.add_goal_pose(obj_pose=goal_pose)
-        start_node_list += self.receiver_fsreg_planner.add_start_pose(obj_pose=start_pose)
-        goal_node_list += self.receiver_fsreg_planner.add_goal_pose(obj_pose=goal_pose)
+        # add_start_pose / add_goal_pose 在该位姿找不到可行抓取时返回 None,
+        # 这里统一兜底成空列表, 避免 "None += list" / "list += None" 抛 TypeError;
+        # 起点或终点任一侧无可行抓取时直接判为无解(返回 None), 交由上层处理。
+        start_node_list = self.sender_fsreg_planner.add_start_pose(obj_pose=start_pose) or []
+        goal_node_list = self.sender_fsreg_planner.add_goal_pose(obj_pose=goal_pose) or []
+        start_node_list += self.receiver_fsreg_planner.add_start_pose(obj_pose=start_pose) or []
+        goal_node_list += self.receiver_fsreg_planner.add_goal_pose(obj_pose=goal_pose) or []
+        if not start_node_list or not goal_node_list:
+            print("[handover] no feasible grasp at start/goal pose -> no path")
+            return None
         # merge graphs
         # add labels to subgraphs
         networkx.set_node_attributes(self.sender_fsreg_planner.graph, name="robot_name", values=self.sender_robot.name)

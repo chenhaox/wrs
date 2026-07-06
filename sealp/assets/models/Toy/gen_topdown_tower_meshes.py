@@ -42,6 +42,19 @@ ORIGINAL_SCALE = 1.5
 GLOBAL_SIZE_FACTOR = 0.75
 SCALE = ORIGINAL_SCALE * GLOBAL_SIZE_FACTOR
 
+# ============================================================
+# 额外缩小 (本次改动)
+# ============================================================
+# 需求: 不改单位(仍为 m), 只把所有部件尺寸整体缩小为原来的 2/3, 即 ÷1.5。
+# 对最终网格统一缩放, 顶点/间隙/插脚等全部按比例同步缩小:
+#   EXPORT_UNIT_SCALE = 1 / 1.5
+# 例: base_plate 现宽 0.2925 m -> /1.5 = 0.195 m。
+EXTRA_SHRINK_DIVISOR = 1.5
+EXPORT_UNIT_SCALE = 1.0 / EXTRA_SHRINK_DIVISOR
+
+# 导出目录: 覆盖现有 Toy/model 下的 STL。
+_OUT_DIR = os.path.join(_HERE, "model")
+
 
 # ============================================================
 # 原始尺寸，单位 m
@@ -164,10 +177,14 @@ def _box_mesh(lx: float, ly: float, lz: float, cx: float, cy: float, cz: float):
 
 def _export_mesh(mesh, out_path: str, label: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # 不改单位(仍为 m); 导出时整体缩小为 2/3 (÷1.5)。
+    mesh.vertices = np.asarray(mesh.vertices, dtype=float) * EXPORT_UNIT_SCALE
     mesh.export(out_path)
+    ext = mesh.bounds[1] - mesh.bounds[0]
     print(
         f"[OK] {label:<14s} -> {os.path.relpath(out_path, _PROJ_ROOT)}  "
-        f"n_verts={len(mesh.vertices)}  n_faces={len(mesh.faces)}"
+        f"n_verts={len(mesh.vertices)}  n_faces={len(mesh.faces)}  "
+        f"extent(m)=[{ext[0]:.4f}, {ext[1]:.4f}, {ext[2]:.4f}]"
     )
 
 
@@ -349,10 +366,12 @@ def _gen_vertical_top_cross_mesh():
 
 
 def main() -> None:
-    print("========== TopDownTower STL 生成：0.75倍缩小 + 柱子高度2倍 + 竖插十字架版本 ==========")
+    print("========== TopDownTower STL 生成：保持 m 单位 + 整体再缩小 1/1.5 版本 ==========")
     print(f"ORIGINAL_SCALE = {ORIGINAL_SCALE}")
     print(f"GLOBAL_SIZE_FACTOR = {GLOBAL_SIZE_FACTOR}")
-    print(f"SCALE = {SCALE}")
+    print(f"SCALE (内部建模, m) = {SCALE}")
+    print(f"EXPORT_UNIT_SCALE  = {EXPORT_UNIT_SCALE:.6f}  (= 1/1.5, 仅缩小不改单位)")
+    print(f"输出目录           = {os.path.relpath(_OUT_DIR, _PROJ_ROOT)}")
 
     print("\n--- base_plate ---")
     print(f"BASE_XYZ              = {BASE_XYZ.tolist()}")
@@ -379,33 +398,34 @@ def main() -> None:
 
     _export_mesh(
         _gen_base_plate_with_square_pockets(),
-        os.path.join(_HERE, "base_plate.stl"),
+        os.path.join(_OUT_DIR, "base_plate.stl"),
         "base_plate",
     )
 
     _export_mesh(
         _gen_post_with_enlarged_foot(),
-        os.path.join(_HERE, "post.stl"),
+        os.path.join(_OUT_DIR, "post.stl"),
         "post",
     )
 
     _export_mesh(
         _gen_middle_plate_with_square_socket(),
-        os.path.join(_HERE, "middle_plate.stl"),
+        os.path.join(_OUT_DIR, "middle_plate.stl"),
         "middle_plate",
     )
 
     _export_mesh(
         _gen_vertical_top_cross_mesh(),
-        os.path.join(_HERE, "top_cross.stl"),
+        os.path.join(_OUT_DIR, "top_cross.stl"),
         "top_cross",
     )
 
     print("\nTopDownTower STL assets generated.")
-    print(f"asset_dir       : {_HERE}")
+    print(f"asset_dir       : {_OUT_DIR}")
+    print("unit logic      : STL 顶点坐标单位仍为 m (不做单位转换)。")
+    print("scale logic     : 在原几何基础上整体再缩小为 2/3 (÷1.5)，比例/间隙同步缩小。")
     print("roof_plate      : 已移除，不生成。")
     print("top_cross logic : 竖着插入 middle_plate 顶面方形孔。")
-    print("scale logic     : 所有零件同步缩小为上一版当前尺寸的 0.75 倍。")
     print("post logic      : 四根柱子仅 Z 高度变为当前 2 倍，XY 和孔位保持一致。")
     print("insert logic    : post 底脚比 base 孔口略小，便于插入。")
 

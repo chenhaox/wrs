@@ -24,7 +24,7 @@ class DualPantheraHTNoBody(ri.RobotInterface):
     def __init__(self,
                  pos=np.zeros(3),
                  rotmat=np.eye(3),
-                 arm_y_offset: float = 0.62,
+                 arm_y_offset: float = 0.6,
                  name: str = "dual_panthera_ht",
                  enable_cc: bool = True):
         super().__init__(pos=pos, rotmat=rotmat, name=name, enable_cc=enable_cc)

@@ -19,31 +19,31 @@ parts:
   base_plate:
     name: Base Plate with Square Pockets
     model: base_model
-    mass: 0.640723
+    mass: 0.189844
   post_bl:
     name: Back-Left Post
     model: post_model
-    mass: 0.227813
+    mass: 0.0675
   post_fl:
     name: Front-Left Post
     model: post_model
-    mass: 0.227813
+    mass: 0.0675
   post_br:
     name: Back-Right Post
     model: post_model
-    mass: 0.227813
+    mass: 0.0675
   post_fr:
     name: Front-Right Post
     model: post_model
-    mass: 0.227813
+    mass: 0.0675
   middle_plate:
     name: Middle Plate with Center Square Socket
     model: middle_plate_model
-    mass: 0.455625
+    mass: 0.135
   top_cross:
     name: Vertical Top Cross
     model: top_cross_model
-    mass: 0.170859
+    mass: 0.050625
 assembly:
 - step: 0
   part: base_plate
@@ -69,9 +69,9 @@ assembly:
   part: post_br
   parent: base_plate
   rel_pos:
-  - 0.095625
-  - 0.073125
-  - 0.018225
+  - 0.06375
+  - 0.04875
+  - 0.01215
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -84,15 +84,15 @@ assembly:
     - !!float '1'
   deps:
   - 0
-  notes: Insert post_br into the matching square pocket. post_bottom_rel=0.018225,
-    base_socket_depth=0.018225.
+  notes: Insert post_br into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
 - step: 2
   part: post_fr
   parent: base_plate
   rel_pos:
-  - 0.095625
-  - -0.073125
-  - 0.018225
+  - 0.06375
+  - -0.04875
+  - 0.01215
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -105,15 +105,15 @@ assembly:
     - !!float '1'
   deps:
   - 1
-  notes: Insert post_fr into the matching square pocket. post_bottom_rel=0.018225,
-    base_socket_depth=0.018225.
+  notes: Insert post_fr into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
 - step: 3
   part: post_bl
   parent: base_plate
   rel_pos:
-  - -0.095625
-  - 0.073125
-  - 0.018225
+  - -0.06375
+  - 0.04875
+  - 0.01215
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -126,15 +126,15 @@ assembly:
     - !!float '1'
   deps:
   - 2
-  notes: Insert post_bl into the matching square pocket. post_bottom_rel=0.018225,
-    base_socket_depth=0.018225.
+  notes: Insert post_bl into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
 - step: 4
   part: post_fl
   parent: base_plate
   rel_pos:
-  - -0.095625
-  - -0.073125
-  - 0.018225
+  - -0.06375
+  - -0.04875
+  - 0.01215
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -147,15 +147,15 @@ assembly:
     - !!float '1'
   deps:
   - 3
-  notes: Insert post_fl into the matching square pocket. post_bottom_rel=0.018225,
-    base_socket_depth=0.018225.
+  notes: Insert post_fl into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
 - step: 5
   part: middle_plate
   parent: base_plate
   rel_pos:
   - !!float '0'
   - !!float '0'
-  - 0.220725
+  - 0.14715
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -176,7 +176,7 @@ assembly:
   rel_pos:
   - !!float '0'
   - !!float '0'
-  - 0.236925
+  - 0.15795
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -189,8 +189,8 @@ assembly:
     - !!float '1'
   deps:
   - 5
-  notes: Insert vertical top_cross into middle_plate center square socket. cross_bottom_rel=0.236925,
-    middle_socket_depth=0.016200.
+  notes: Insert vertical top_cross into middle_plate center square socket. cross_bottom_rel=0.157950,
+    middle_socket_depth=0.010800.
 symmetry_groups:
   posts:
   - post_bl

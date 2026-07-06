@@ -64,11 +64,15 @@ CROSS_STL = os.path.join(ASSET_DIR, "top_cross.stl")
 # 必须和 gen_topdown_tower_meshes.py 保持一致。
 # 之前这里还是 SCALE=1.5，而 STL 生成脚本已经改成 1.5*0.75=1.125，
 # 所以展示时四根柱子会放到旧孔位，导致看起来“孔没有对准”。
+# 进一步:gen 脚本在导出时又对整网格统一缩小 1/1.5 (EXPORT_SHRINK),
+# base_plate 的孔位也跟着缩小了, 所以这里柱子 XY 偏移必须同样乘上 EXPORT_SHRINK,
+# 否则柱子会落在缩小前的旧孔位, 仍然对不齐。
 ORIGINAL_SCALE = 1.5
 GLOBAL_SIZE_FACTOR = 0.75
 SCALE = ORIGINAL_SCALE * GLOBAL_SIZE_FACTOR
-POST_OFFSET_X = 0.085 * SCALE
-POST_OFFSET_Y = 0.065 * SCALE
+EXPORT_SHRINK = 1.0 / 1.5  # 必须与 gen_topdown_tower_meshes.py 的 EXPORT_UNIT_SCALE 一致
+POST_OFFSET_X = 0.085 * SCALE * EXPORT_SHRINK
+POST_OFFSET_Y = 0.065 * SCALE * EXPORT_SHRINK
 
 # 这里仅用于展示，不影响 asmdef / layout 搜索
 FIXTURE_POS = np.array([0.20, -0.30, 0.0], dtype=float)

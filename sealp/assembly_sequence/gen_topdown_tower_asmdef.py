@@ -87,13 +87,18 @@ ORIGINAL_SCALE = 1.5
 GLOBAL_SIZE_FACTOR = 0.75
 SCALE = ORIGINAL_SCALE * GLOBAL_SIZE_FACTOR  # 1.125
 
-# 四个 base_plate 孔的位置。
-# 注意：之前孔没对准，通常就是 show/asmdef 还在用 SCALE=1.5，
-# 而 STL 生成脚本已经改成 SCALE=1.125。
+# gen_topdown_tower_meshes.py 在导出时又对整网格统一缩小 1/1.5 (EXPORT_UNIT_SCALE),
+# 所以 STL 的真实尺寸 = 内部建模(SCALE) × EXPORT_SHRINK。
+# Z 方向本脚本用 _load_mesh_bounds 实测网格, 会自动适配; 但 XY 孔位是按公式写死的,
+# 必须乘上同样的 EXPORT_SHRINK, 否则柱子会落在缩小前的旧孔位 -> 对不齐。
+EXPORT_SHRINK = 1.0 / 1.5  # 必须与 gen_topdown_tower_meshes.py 的 EXPORT_UNIT_SCALE 一致
+EFFECTIVE_SCALE = SCALE * EXPORT_SHRINK  # STL 的真实线性缩放(相对 *_ORG)
+
+# 四个 base_plate 孔的位置 (与缩小后的 STL 孔位一致)。
 POST_OFFSET_X_ORG = 0.085
 POST_OFFSET_Y_ORG = 0.065
-POST_X = POST_OFFSET_X_ORG * SCALE
-POST_Y = POST_OFFSET_Y_ORG * SCALE
+POST_X = POST_OFFSET_X_ORG * EFFECTIVE_SCALE
+POST_Y = POST_OFFSET_Y_ORG * EFFECTIVE_SCALE
 
 # 与 mesh 生成脚本保持一致
 BASE_SOCKET_DEPTH_RATIO = 0.50
@@ -227,6 +232,8 @@ def generate() -> AssemblyDef:
     print(f"ORIGINAL_SCALE          = {ORIGINAL_SCALE}")
     print(f"GLOBAL_SIZE_FACTOR      = {GLOBAL_SIZE_FACTOR}")
     print(f"SCALE                   = {SCALE}")
+    print(f"EXPORT_SHRINK           = {EXPORT_SHRINK:.6f}")
+    print(f"EFFECTIVE_SCALE         = {EFFECTIVE_SCALE:.6f}")
     print(f"POST_HEIGHT_FACTOR      = {POST_HEIGHT_FACTOR}")
     print(f"POST_X / POST_Y         = {POST_X:.6f}, {POST_Y:.6f}")
     print(f"base_rel_to_fixture_z   = {base_rel_to_fixture_z:.6f}")
@@ -261,7 +268,7 @@ def generate() -> AssemblyDef:
         part_id="base_plate",
         name="Base Plate with Square Pockets",
         model="base_model",
-        mass=0.45 * SCALE ** 3,
+        mass=0.45 * EFFECTIVE_SCALE ** 3,
     ))
 
     for pid, name in [
@@ -274,21 +281,21 @@ def generate() -> AssemblyDef:
             part_id=pid,
             name=name,
             model="post_model",
-            mass=0.08 * SCALE ** 3 * POST_HEIGHT_FACTOR,
+            mass=0.08 * EFFECTIVE_SCALE ** 3 * POST_HEIGHT_FACTOR,
         ))
 
     asm.add_part(PartDef(
         part_id="middle_plate",
         name="Middle Plate with Center Square Socket",
         model="middle_plate_model",
-        mass=0.32 * SCALE ** 3,
+        mass=0.32 * EFFECTIVE_SCALE ** 3,
     ))
 
     asm.add_part(PartDef(
         part_id="top_cross",
         name="Vertical Top Cross",
         model="top_cross_model",
-        mass=0.12 * SCALE ** 3,
+        mass=0.12 * EFFECTIVE_SCALE ** 3,
     ))
 
     asm.add_symmetry_group("posts", ["post_bl", "post_fl", "post_br", "post_fr"])

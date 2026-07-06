@@ -33,46 +33,47 @@ Conventions
   ``move_p`` / ``move_l`` therefore raise :class:`NotImplementedError`
   unless an external IK solver is plugged in.
 
-Example
--------
-
->>> from fafu_robot_controller import FafuRobotController
->>> import numpy as np
->>>
->>> # cfg_path is required; gripper is optional (motor id 7 in the
->>> # default robot.cfg).
->>> arm = FafuRobotController(
-...     cfg_path="robot.cfg",
-...     has_gripper=True,
-...     gripper_motor_id=7,
-... )
->>>
->>> # current joint angles (rad)
->>> q = arm.get_joint_values()
->>>
->>> # move to a target configuration with S-curve and wait for finish
->>> arm.move_j([0, 0.2, 0.5, 0, 0, 0], speed=20, block=True)
->>>
->>> arm.open_gripper()
->>> arm.close_gripper()
->>>
->>> # Piper-style position+effort (firmware-side torque cap)
->>> arm.gripper_control(angle=math.radians(-90), effort=600)
->>>
->>> # Force-aware grasp (Python-side torque monitoring + early stop)
->>> result = arm.grasp(force_threshold=500)
->>> if result.grasped:
-...     print(f"got it, peak torque {result.peak_torque_raw} raw, "
-...           f"closed {result.closed_deg:.1f} deg in {result.duration_s:.2f}s")
->>>
->>> arm.disable()
->>> arm.close_connection()
-"""
+# Example
+# -------
+#
+# >>> from fafu_robot_controller import FafuRobotController
+# >>> import numpy as np
+# >>>
+# >>> # cfg_path is required; gripper is optional (motor id 7 in the
+# >>> # default robot.cfg).
+# >>> arm = FafuRobotController(
+# ...     cfg_path="robot.cfg",
+# ...     has_gripper=True,
+# ...     gripper_motor_id=7,
+# ... )
+# >>>
+# >>> # current joint angles (rad)
+# >>> q = arm.get_joint_values()
+# >>>
+# >>> # move to a target configuration with S-curve and wait for finish
+# >>> arm.move_j([0, 0.2, 0.5, 0, 0, 0], speed=20, block=True)
+# >>>
+# >>> arm.open_gripper()
+# >>> arm.close_gripper()
+# >>>
+# >>> # Piper-style position+effort (firmware-side torque cap)
+# >>> arm.gripper_control(angle=math.radians(-90), effort=600)
+# >>>
+# >>> # Force-aware grasp (Python-side torque monitoring + early stop)
+# >>> result = arm.grasp(force_threshold=500)
+# >>> if result.grasped:
+# ...     print(f"got it, peak torque {result.peak_torque_raw} raw, "
+# ...           f"closed {result.closed_deg:.1f} deg in {result.duration_s:.2f}s")
+# >>>
+# >>> arm.disable()
+# >>> arm.close_connection()
+# """
 
 from __future__ import annotations
 
 import math
 import os
+import pickle
 import sys
 import time
 from dataclasses import dataclass
@@ -117,6 +118,26 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     pin = None  # type: ignore
     _PIN_EXIST = False
+
+# Optional: the Panthera-HT SDK's ``hightorque_robot`` binding (a *different*
+# pybind11 module from ``panthera_motor`` above).  It is only needed by the
+# MIT (five-parameter ``pos_vel_tqe_kp_kd``) streaming methods
+# (:meth:`FafuRobotController.setup_mit_control` and friends).  The rest of
+# the controller keeps working through ``panthera_motor``/``HightorqueSerial``
+# when this is missing.
+#
+# ★ Important ★ ``hightorque_robot.Robot`` opens its OWN CAN/serial session
+# from a YAML config (e.g. ``Follower.yaml`` / ``robot_config.yaml``); it is a
+# separate driver from this controller's ``self._ht`` (``HightorqueSerial``).
+# The two must NOT drive the same bus at the same time — pick one owner for
+# any given run (see :meth:`setup_mit_control`).
+try:
+    import hightorque_robot as htr  # type: ignore
+
+    _HTR_EXIST = True
+except Exception:  # pragma: no cover - optional dependency
+    htr = None  # type: ignore
+    _HTR_EXIST = False
 
 
 # ============================================================================
@@ -292,6 +313,61 @@ class ServoOpts:
     # Set ``lag_abort_consecutive > 0`` to opt back into auto-abort (handy
     # for production safety, but not for diagnostic scripts).
     lag_abort_consecutive: int = 0
+
+
+@dataclass
+class MitOpts:
+    """Tunables for MIT (five-parameter ``pos_vel_tqe_kp_kd``) streaming.
+
+    Used by :meth:`FafuRobotController.setup_mit_control`,
+    :meth:`FafuRobotController.mit_servo_j` and
+    :meth:`FafuRobotController.move_jntspace_path_mit`.
+
+    Unlike :class:`ServoOpts` (which streams *position* frames through
+    ``HightorqueSerial.set_many_pos_vel_tqe_partial``), MIT mode streams each
+    joint a full ``(pos, vel, tqe, kp, kd)`` command through the SDK
+    ``hightorque_robot`` binding — the firmware then runs a per-joint
+    impedance law ``tau = kp*(pos - q) + kd*(vel - q_dot) + tqe``.
+
+    ★ SAFETY ★ ``kp`` / ``kd`` are per-joint impedance gains, NOT the raw
+    firmware position mode.  Wrong gains make the arm either soft (droops
+    under gravity) or stiff/oscillatory.  Always dry-run and start with
+    conservative gains on a slow path.
+
+    Attributes
+    ----------
+    kp, kd : tuple of float or float, optional
+        Per-joint proportional / derivative gains.  A scalar is broadcast to
+        every joint.  Length (when a sequence) must equal ``num_joints``.
+        Defaults are deliberately mild (``kp=8.0``, ``kd=0.5``); tune per
+        joint on hardware.
+    tqe : tuple of float or float, optional
+        Per-joint feed-forward torque (Nm) added every frame.  Default
+        ``0.0`` (pure impedance tracking; pair with
+        :meth:`compute_compensation_torque` if you want gravity feed-forward).
+    rate_hz : float, optional
+        Nominal streaming rate used to compute ``dt`` for the feed-forward
+        velocity and for the built-in inter-frame sleep in
+        :meth:`move_jntspace_path_mit`.  Default ``200.0``.
+    max_step_rad : float, optional
+        Per-step jump clamp in rad, measured against the last commanded MIT
+        target.  Protects against upper-layer planner spikes.  Default
+        ``0.05`` (~2.9 deg).  ``0`` / negative disables.
+    feedforward_vel : bool, optional
+        When ``True`` (default) the per-frame ``vel`` is the required
+        velocity ``(target - last_target) * rate_hz``; when ``False`` a
+        constant ``0.0`` velocity is sent (position-only impedance).
+    is_radians : bool, optional
+        Interpret joint targets in radians (default) or degrees.
+    """
+
+    kp: "float | Iterable[float]" = 8.0
+    kd: "float | Iterable[float]" = 0.5
+    tqe: "float | Iterable[float]" = 0.0
+    rate_hz: float = 200.0
+    max_step_rad: float = 0.05
+    feedforward_vel: bool = True
+    is_radians: bool = True
 
 
 @dataclass
@@ -520,11 +596,29 @@ class FafuRobotController:
         # servo_start.
         self._servo_aborted_reason: Optional[str] = None
 
+        # ---- MIT (pos_vel_tqe_kp_kd) streaming state ----
+        # All None/empty until setup_mit_control() succeeds. ``_mit_robot`` is
+        # the SDK ``hightorque_robot.Robot`` handle (a separate driver from
+        # self._ht); ``_mit_motors`` caches its joint motor objects so the hot
+        # streaming loop does not re-fetch them every frame.
+        self._mit_robot = None
+        self._mit_motors: List[object] = []
+        self._mit_opts: Optional[MitOpts] = None
+        self._mit_kp: Optional[np.ndarray] = None
+        self._mit_kd: Optional[np.ndarray] = None
+        self._mit_tqe: Optional[np.ndarray] = None
+        self._mit_last_target_rad: Optional[np.ndarray] = None
+
         # ---- Dynamics (gravity / friction compensation) state ----
         # All None until setup_dynamics() succeeds. Kept on the instance
         # so the per-tick compensation loop does not re-load the URDF.
         self._pin_model = None
         self._pin_data = None
+        # End-effector (TCP) frame id inside the pinocchio model, used by
+        # forward_kinematics / inverse_kinematics / move_p / move_l. None
+        # until kinematics is first used; resolved lazily (last frame) or
+        # set explicitly via set_end_effector_frame().
+        self._ee_frame_id: Optional[int] = None
         self._dyn_gravity_vec: np.ndarray = np.array([0.0, 0.0, -9.81])
         # Per-joint motor model strings used to convert Nm -> raw int16
         # inside set_pos_vel_tqe_kp_kd. None => "" (coeff 1.0, see
@@ -842,17 +936,15 @@ class FafuRobotController:
             value ``control_frequency`` even though TOPPRA expects a
             period (in seconds), not a rate.
 
-        Raises
-        ------
-        NotImplementedError
-            When the optional ``wrs`` dependency is not available.
+        Notes
+        -----
+        When the optional ``toppra`` package (via
+        ``wrs.motion.trajectory.piecewisepoly_toppra``) is available the
+        path is re-timed to respect ``max_jntvel`` / ``max_jntacc``.
+        Otherwise the planned frames are replayed **as-is** (no re-timing);
+        ``pip install toppra`` to enable velocity/acceleration-optimal
+        interpolation.
         """
-        if not _TOPPRA_EXIST:
-            raise NotImplementedError(
-                "TOPPRA-based interpolation requires "
-                "`wrs.motion.trajectory.piecewisepoly_toppra`; "
-                "install it or use a custom interpolator."
-            )
         if path is None:
             raise ValueError("path must not be None")
 
@@ -862,14 +954,47 @@ class FafuRobotController:
                 f"path must have shape (N, {self.num_joints}); got {path_arr.shape}"
             )
 
-        tpply = pwp.PiecewisePolyTOPPRA()
-        interpolated = tpply.interpolate_by_max_spdacc(
-            path=path_arr,
-            ctrl_freq=control_frequency,
-            max_vels=max_jntvel,
-            max_accs=max_jntacc,
-            toggle_debug=False,
-        )
+        # TOPPRA needs >=3 distinct gridpoints; a 2-frame (or degenerate /
+        # zero-length) sub-path -- common at gripper-change boundaries --
+        # makes it raise "Bad input gridpoints". On Windows it can also raise
+        # "Buffer dtype mismatch, expected 'INT_t' but got 'long'" (numpy int
+        # width vs toppra's Cython type). In ALL those cases we must NOT stream
+        # the sparse waypoints as-is: targets too far apart -> the arm cannot
+        # reach one before the next overwrites it and visibly sags/drops.
+        # Instead densify into small fixed-size steps so tracking stays smooth.
+        # ``path`` unit follows ``is_radians``; pick a matching max step.
+        max_step = 0.03 if is_radians else math.degrees(0.03)
+        interpolated = None
+        if _TOPPRA_EXIST and path_arr.shape[0] >= 3:
+            try:
+                tpply = pwp.PiecewisePolyTOPPRA()
+                interpolated = tpply.interpolate_by_max_spdacc(
+                    path=path_arr,
+                    ctrl_freq=control_frequency,
+                    max_vels=max_jntvel,
+                    max_accs=max_jntacc,
+                    toggle_debug=False,
+                )
+                interpolated = np.asarray(interpolated, dtype=float)
+                if interpolated.ndim != 2 or interpolated.shape[0] == 0:
+                    interpolated = None
+            except Exception as e:
+                if not getattr(self, "_warned_toppra_fallback", False):
+                    print(f"[FafuRobot] TOPPRA re-timing failed ({type(e).__name__}: "
+                          f"{e}); using built-in dense linear interpolation instead.")
+                    self._warned_toppra_fallback = True
+                interpolated = None
+        elif not _TOPPRA_EXIST:
+            if not getattr(self, "_warned_no_toppra", False):
+                print("[FafuRobot] TOPPRA not installed; using built-in dense "
+                      "linear interpolation (install toppra for vel/acc-optimal "
+                      "re-timing).")
+                self._warned_no_toppra = True
+
+        if interpolated is None:
+            # Safe fallback: dense, small-step linear path (no sparse jumps).
+            interpolated = _densify_jnt_path(path_arr, max_step=max_step)
+
         interpolated = interpolated[start_frame_id:]
         for jnt_values in interpolated:
             self.move_j(
@@ -879,6 +1004,204 @@ class FafuRobotController:
                 block=False,
             )
             time.sleep(max(0.005, control_frequency))
+
+    def run_motion_pkl(
+        self,
+        pkl_path: str,
+        arm_side: str,
+        *,
+        speed: int = 30,
+        actuate_gripper: bool = True,
+        grip_change_thresh: float = 0.003,
+        grip_effort: Optional[int] = None,
+        settle_s: float = 0.4,
+        step_pause_s: float = 1.0,
+        key_pause_s: float = 0.6,
+        follow_path_blocking: bool = False,
+        waypoint_stride: int = 2,
+        dry_run: bool = False,
+        max_jntvel: Optional[List[float]] = None,
+        max_jntacc: Optional[List[float]] = None,
+        control_frequency: float = 0.05,
+        payload: Optional[dict] = None,
+        home_between: Optional[object] = "all",
+        home_between_speed: int = 25,
+    ) -> None:
+        """Replay **one arm's** trajectory from a sealp motion ``.pkl``.
+
+        The ``.pkl`` produced by ``execute_layout_sequence_visual.py``
+        stores, per assembly step, one or more *segments*.  Each segment
+        carries a per-frame joint path (``jv_list``, ``num_joints`` values
+        in radians) bound to an ``arm_side`` (``"lft"``/``"rgt"``) plus the
+        gripper jaw width per frame (``ev_list``, metres).  Because the
+        ``panthera_ht`` plan and the Fafu arm share the same 6-DoF model,
+        these joint angles map **directly** onto this controller.
+
+        This method:
+
+        1. loads the ``.pkl`` and selects the segments whose ``arm_side``
+           matches ``arm_side`` (in original step order);
+        2. splits each segment at frames where the gripper width changes
+           (grasp / release happen *mid*-segment in a single-arm
+           pick-and-place), so the joint motion and the gripper command
+           stay correctly ordered;
+        3. streams each joint sub-path through :meth:`move_jntspace_path`
+           and, at each split boundary, closes the gripper when the width
+           drops (a grasp) or opens it when the width rises (a release).
+
+        Parameters
+        ----------
+        pkl_path : str
+            Path to the motion ``.pkl`` (e.g.
+            ``tower_optimal_initial_motions.pkl``).
+        arm_side : {"lft", "rgt"}
+            Which physical arm this controller drives.
+        speed : int, optional
+            Speed percentage forwarded to :meth:`move_jntspace_path`.
+        actuate_gripper : bool, optional
+            Drive the gripper at width-change boundaries.  Ignored when the
+            controller has no gripper.  Defaults to ``True``.
+        grip_change_thresh : float, optional
+            Minimum jaw-width delta (m) that counts as a grasp/release.
+        grip_effort : int, optional
+            Firmware torque cap (raw int16) forwarded to the gripper.
+        settle_s : float, optional
+            Pause after each sub-path before the gripper acts, to let the
+            arm finish (``move_jntspace_path`` itself is non-blocking).
+        step_pause_s : float, optional
+            Extra pause (s) *between* parts: after finishing one part the arm
+            holds in place this long before moving on to the next part's start
+            pose (it does **not** return home in between). Makes the
+            part-by-part progress visible. Defaults to ``1.0``.
+        key_pause_s : float, optional
+            Brief pause (s) at each **grasp / release key point** (the end of a
+            gripper sub-path) after the jaw actuates. The path *within* a
+            sub-path streams continuously; only these pick/place points pause.
+            Defaults to ``0.6``.
+        follow_path_blocking : bool, optional
+            How to traverse each sub-path's planned (collision-free) frames:
+
+            * ``False`` (default): stream the densified frames through
+              :meth:`move_jntspace_path` (open-loop, smooth but can run fast).
+            * ``True``: step through the planned waypoints with **blocking**
+              ``move_j`` (one S-curve per waypoint). This follows the planned
+              geometry without shortcutting, never streams too fast, and keeps
+              gripper timing correct because every move fully completes before
+              the next. Use this when point-to-point key-frames shortcut into
+              obstacles (e.g. the arm clips the table).
+        waypoint_stride : int, optional
+            Only with ``follow_path_blocking``: keep every ``stride``-th planned
+            frame as a blocking waypoint (the last frame is always kept). ``1``
+            = follow every frame (closest to the plan, most stop-go); larger =
+            fewer stops / faster but slightly more straight-line cutting between
+            kept waypoints. Defaults to ``2``.
+        dry_run : bool, optional
+            Print the plan (segments, frame counts, gripper actions)
+            without commanding the hardware.  Strongly recommended first.
+        max_jntvel, max_jntacc : list of float, optional
+            Per-joint limits forwarded to TOPPRA.
+
+        Notes
+        -----
+        * This drives a **single** arm.  For the dual-arm tower assembly,
+          run two controllers (one per CAN/serial port) and dispatch with
+          :func:`replay_dual_arm_motion_pkl`.
+        * **Calibrate first.** The joint angles assume the real motor zero
+          / sign convention matches the sim URDF.  Verify on a small,
+          slow ``move_j`` before replaying a full path.
+        """
+        # 允许调用方传入已在内存里处理过的 payload(如右臂抬高补偿); 否则从磁盘读取。
+        if payload is None:
+            payload = load_motion_pkl(pkl_path)
+        segments = extract_arm_segments(payload, arm_side)
+        if not segments:
+            print(f"[FafuRobot] run_motion_pkl: no '{arm_side}' segments in "
+                  f"{os.path.basename(pkl_path)} — nothing to do.")
+            return
+
+        do_grip = actuate_gripper and self._has_gripper
+        home_all, home_set = _resolve_home_between(home_between)
+        print(f"[FafuRobot] run_motion_pkl: arm={arm_side} "
+              f"segments={len(segments)} gripper={'on' if do_grip else 'off'}"
+              + (f" home_between={'all' if home_all else sorted(home_set)}"
+                 if (home_all or home_set) else " home_between=off")
+              + ("  [DRY-RUN]" if dry_run else ""))
+
+        n_steps = len(segments)
+        for si, seg in enumerate(segments, 1):
+            jv = seg["jv"]
+            ev = seg["ev"]
+            pid = seg["part_id"]
+            subpaths = _split_path_by_gripper(jv, ev, grip_change_thresh)
+            print(f"\n[{arm_side}] === 第 {si}/{n_steps} 步 (step {seg['step_id']}): "
+                  f"零件 [{pid}] | {len(jv)} 帧, {len(subpaths)} 段 ===")
+            for sp in subpaths:
+                path = sp["path"]
+                grip = sp["gripper"]
+                grip_txt = _grip_action_text(grip, pid)
+                if dry_run:
+                    wtxt = ""
+                    jw = sp.get("jaw_width")
+                    if grip and jw is not None and np.isfinite(jw):
+                        wtxt = f"  jaw={float(jw) * 1000:.1f}mm"
+                    print(f"    [{arm_side}] [{pid}] 移动 {len(path)} 帧"
+                          + (f"  ->  {grip_txt}{wtxt}" if grip else ""))
+                    continue
+                if follow_path_blocking and len(path) >= 2:
+                    # 沿规划路径逐航点阻塞 move_j: 不抄近路(避障路径被保留),
+                    # 不会因流式过快而失稳, 且每点走完才动下一点 -> 夹爪时序正确。
+                    stride = max(1, int(waypoint_stride))
+                    idxs = list(range(0, len(path), stride))
+                    if idxs[-1] != len(path) - 1:
+                        idxs.append(len(path) - 1)
+                    print(f"    [{arm_side}] [{pid}] 沿规划路径走 {len(idxs)}/{len(path)} 个航点(阻塞)...")
+                    for fi in idxs:
+                        self.move_j(path[fi], is_radians=True,
+                                    speed=speed, block=True)
+                elif len(path) >= 2:
+                    # 段内连续流式(平滑), 段尾再用阻塞 move_j 收尾, 确保真正到达
+                    # "取/放"关键点后再动夹爪(流式是开环, 末帧可能还差一点)。
+                    print(f"    [{arm_side}] [{pid}] 流式回放 ({len(path)} 帧, 段尾收尾到位)...")
+                    self.move_jntspace_path(
+                        path,
+                        is_radians=True,
+                        max_jntvel=max_jntvel,
+                        max_jntacc=max_jntacc,
+                        start_frame_id=0,
+                        speed=speed,
+                        control_frequency=control_frequency,
+                    )
+                    self.move_j(path[-1], is_radians=True, speed=speed, block=True)
+                elif len(path) == 1:
+                    self.move_j(path[0], is_radians=True,
+                                speed=speed, block=True)
+                time.sleep(settle_s)
+                if do_grip and grip in ("close", "open"):
+                    self.actuate_gripper_from_pkl(
+                        grip, sp.get("jaw_width"),
+                        effort=grip_effort, part_id=pid, arm_side=arm_side,
+                    )
+                elif grip:
+                    print(f"    [{arm_side}] (夹爪动作 {grip} 已跳过: gripper off)")
+                # 只在"取/放"关键点(有夹爪动作的段尾)稍微停一下; 段内不停, 保持连续。
+                if grip and key_pause_s > 0 and not dry_run:
+                    time.sleep(key_pause_s)
+            # 一个零件结束。
+            if si < n_steps:
+                nxt = segments[si]["part_id"]
+                do_home = should_home_after_part(pid, home_between)
+                if step_pause_s > 0 and not dry_run:
+                    via = "先回 home 再去" if do_home else "直接前往(不回 home)"
+                    print(f"    [{arm_side}] —— 零件 [{pid}] 完成, 停顿 {step_pause_s:.1f}s "
+                          f"后{via}下一个零件 [{nxt}] ——")
+                    time.sleep(step_pause_s)
+                if do_home and not dry_run:
+                    print(f"    [{arm_side}] 零件 [{pid}] 后先回到 home (speed={home_between_speed}), "
+                          f"再去下一个零件 [{nxt}] ...")
+                    self.go_home(speed=home_between_speed)
+                elif do_home:
+                    print(f"    [{arm_side}] (dry-run) 零件 [{pid}] 后将回 home 再去 [{nxt}]")
+        print(f"\n[FafuRobot] run_motion_pkl: arm={arm_side} 全部 {n_steps} 步完成。")
 
     # ------------------------------------------------------------------
     #  Servo (online streaming) control
@@ -1348,6 +1671,417 @@ class FafuRobotController:
         While set, :meth:`servo_j` refuses every frame and returns ``False``.
         """
         return self._servo_aborted_reason
+
+    # ------------------------------------------------------------------
+    #  MIT (pos_vel_tqe_kp_kd) streaming control
+    # ------------------------------------------------------------------
+    #
+    #  ``move_j`` / ``servo_j`` stream *position* frames through
+    #  ``HightorqueSerial.set_many_pos_vel_tqe(_partial)`` (firmware position
+    #  mode).  The methods below stream the same joint trajectory through the
+    #  SDK ``hightorque_robot`` binding's five-parameter MIT channel instead:
+    #  every joint receives ``(pos, vel, tqe, kp, kd)`` and the firmware runs
+    #  a per-joint impedance law
+    #
+    #      tau = kp * (pos - q) + kd * (vel - q_dot) + tqe .
+    #
+    #  Lifecycle (mirrors servo_start/servo_j/servo_end)::
+    #
+    #      arm.setup_mit_control("Follower.yaml", opts=MitOpts(kp=..., kd=...))
+    #      for q in path:
+    #          arm.mit_servo_j(q)          # one frame, non-blocking
+    #          time.sleep(dt)
+    #      arm.mit_control_end("brake")
+    #
+    #  ★ Two hard prerequisites ★
+    #    1) the ``hightorque_robot`` wheel must be importable (``_HTR_EXIST``);
+    #    2) the SDK ``Robot`` opens its OWN CAN session from a YAML config, so
+    #       this controller's ``self._ht`` and the MIT ``Robot`` must not drive
+    #       the same bus concurrently. Construct this controller with
+    #       ``auto_enable=False, auto_polling=False`` (or close it) when you
+    #       intend to drive purely through MIT.
+    #
+    #  ★ Firmware caveat ★ On some Panthera-HT motor firmware the MIT channel
+    #  (mode 0x15) is silently ignored (see the note in
+    #  :meth:`apply_compensation_torque`). Verify on hardware with a slow,
+    #  low-gain dry run before trusting a full replay.
+    # ------------------------------------------------------------------
+    def setup_mit_control(
+        self,
+        config_path: str,
+        *,
+        opts: Optional[MitOpts] = None,
+        kp: "float | Iterable[float] | None" = None,
+        kd: "float | Iterable[float] | None" = None,
+        tqe: "float | Iterable[float] | None" = None,
+    ) -> None:
+        """Open the SDK ``hightorque_robot.Robot`` used by the MIT streamers.
+
+        Call once before :meth:`mit_servo_j` / :meth:`move_jntspace_path_mit`.
+        Idempotent: a second call rebuilds the handle with the new options.
+
+        Parameters
+        ----------
+        config_path : str
+            Path to the SDK YAML config (e.g. ``Follower.yaml`` /
+            ``robot_config.yaml``) that ``hightorque_robot.Robot`` expects.
+            This is a **different** file from this controller's
+            ``robot.cfg`` — it declares the CAN board / motor layout for the
+            SDK driver.
+        opts : MitOpts, optional
+            Streaming tunables (gains, rate, step clamp). Defaults to
+            :class:`MitOpts`. ``kp`` / ``kd`` / ``tqe`` keyword overrides take
+            precedence over the values inside ``opts`` when given.
+        kp, kd, tqe : float or iterable of float, optional
+            Convenience per-joint gain / feed-forward overrides. A scalar is
+            broadcast to every joint; a sequence must have ``num_joints``
+            entries.
+
+        Raises
+        ------
+        RuntimeError
+            ``hightorque_robot`` is not importable, the ``Robot`` fails to
+            open, or its joint count does not match :attr:`num_joints`.
+        """
+        if not _HTR_EXIST:
+            raise RuntimeError(
+                "MIT control needs the 'hightorque_robot' package, which is "
+                "not installed.\n"
+                "  install the SDK wheel: pip install hightorque_robot-*.whl\n"
+                "(it is a separate pybind11 module from panthera_motor)."
+            )
+        if not config_path:
+            raise ValueError("setup_mit_control: config_path must be provided")
+        resolved = self._resolve_cfg_path(config_path)
+        if not os.path.isfile(resolved):
+            raise RuntimeError(
+                f"setup_mit_control: config not found: {resolved!r}")
+
+        # ★ dual-driver guard ★ warn (do not hard-fail) if this controller's
+        # own HightorqueSerial session is still actively polling the bus.
+        try:
+            if self._ht.is_polling():
+                print("[FafuRobot] setup_mit_control: WARNING this controller's "
+                      "HightorqueSerial is still polling. The SDK Robot opens "
+                      "its own CAN session on the same bus; stop polling / "
+                      "close_connection() before MIT streaming to avoid "
+                      "contention.")
+        except Exception:
+            pass
+
+        opts = MitOpts(**vars(opts)) if opts is not None else MitOpts()
+        if kp is not None:
+            opts.kp = kp
+        if kd is not None:
+            opts.kd = kd
+        if tqe is not None:
+            opts.tqe = tqe
+        if opts.rate_hz <= 0.0:
+            opts.rate_hz = 200.0
+
+        try:
+            robot = htr.Robot(resolved)
+        except Exception as e:
+            raise RuntimeError(
+                f"setup_mit_control: failed to open hightorque_robot.Robot "
+                f"from {resolved!r}: {e}") from e
+
+        try:
+            motors = list(robot.get_motors())
+        except Exception as e:
+            raise RuntimeError(
+                f"setup_mit_control: robot.get_motors() failed: {e}") from e
+
+        # The SDK convention (Panthera_lib) is: the gripper is the LAST motor,
+        # the manipulator joints are the leading ``num_joints`` motors.
+        if len(motors) < self.num_joints:
+            raise RuntimeError(
+                f"setup_mit_control: SDK Robot exposes {len(motors)} motors, "
+                f"fewer than num_joints={self.num_joints}.")
+        joint_motors = motors[: self.num_joints]
+
+        self._mit_robot = robot
+        self._mit_motors = joint_motors
+        self._mit_opts = opts
+        self._mit_kp = self._broadcast_mit_gain(opts.kp, "kp")
+        self._mit_kd = self._broadcast_mit_gain(opts.kd, "kd")
+        self._mit_tqe = self._broadcast_mit_gain(opts.tqe, "tqe")
+
+        # Seed the per-step clamp reference with the live pose so the first
+        # frame is a zero-step move and cannot trip the clamp.
+        self._mit_last_target_rad = self._read_mit_positions()
+
+        print(
+            f"[FafuRobot] setup_mit_control: SDK Robot ready "
+            f"({self.num_joints} joints), rate={opts.rate_hz:.0f}Hz, "
+            f"kp={self._mit_kp.tolist()}, kd={self._mit_kd.tolist()}, "
+            f"tqe={self._mit_tqe.tolist()}, "
+            f"max_step={opts.max_step_rad}rad, "
+            f"feedforward_vel={'on' if opts.feedforward_vel else 'off'}"
+        )
+
+    def _broadcast_mit_gain(
+        self,
+        val: "float | Iterable[float]",
+        name: str,
+    ) -> np.ndarray:
+        """Broadcast a scalar/sequence gain into a ``num_joints`` float array."""
+        arr = np.asarray(val, dtype=float)
+        if arr.ndim == 0:
+            arr = np.full(self.num_joints, float(arr))
+        if arr.shape != (self.num_joints,):
+            raise ValueError(
+                f"{name} must be a scalar or {self.num_joints} values, "
+                f"got shape {arr.shape}")
+        return arr
+
+    def _read_mit_positions(self) -> np.ndarray:
+        """Read the current joint positions (rad) from the SDK Robot motors."""
+        out = np.zeros(self.num_joints, dtype=float)
+        for i, motor in enumerate(self._mit_motors):
+            try:
+                st = motor.get_current_motor_state()
+                out[i] = float(st.position)
+            except Exception:
+                out[i] = 0.0
+        return out
+
+    @property
+    def is_mit_ready(self) -> bool:
+        """``True`` iff :meth:`setup_mit_control` has succeeded."""
+        return self._mit_robot is not None and bool(self._mit_motors)
+
+    def mit_servo_j(
+        self,
+        target_angles: Iterable[float],
+        *,
+        kp: "float | Iterable[float] | None" = None,
+        kd: "float | Iterable[float] | None" = None,
+        tqe: "float | Iterable[float] | None" = None,
+    ) -> bool:
+        """Stream ONE joint-space target through the MIT channel (non-blocking).
+
+        This is the MIT-mode analogue of :meth:`servo_j`: instead of sending a
+        firmware *position* frame it sends, per joint, a full
+        ``pos_vel_tqe_kp_kd`` command and issues a single
+        ``robot.motor_send_cmd()``. Call it repeatedly at ``opts.rate_hz``
+        (the caller owns the inter-frame sleep), or let
+        :meth:`move_jntspace_path_mit` drive the loop for you.
+
+        Parameters
+        ----------
+        target_angles : iterable of float
+            ``num_joints`` joint angles, in the unit set by ``opts.is_radians``
+            (radians by default).
+        kp, kd, tqe : float or iterable of float, optional
+            One-shot gain / feed-forward overrides for this frame only. When
+            omitted the values from :meth:`setup_mit_control` are used.
+
+        Returns
+        -------
+        bool
+            ``True`` when the frame was sent; ``False`` when the payload was
+            rejected (not set up, wrong length, NaN/Inf, or a send error).
+        """
+        if not self.is_mit_ready or self._mit_opts is None:
+            print("[FafuRobot] mit_servo_j: not set up; call setup_mit_control first")
+            return False
+
+        opts = self._mit_opts
+        arr = np.asarray(list(target_angles), dtype=float)
+        if arr.size != self.num_joints:
+            print(f"[FafuRobot] mit_servo_j: expected {self.num_joints} angles, "
+                  f"got {arr.size}")
+            return False
+        if not np.all(np.isfinite(arr)):
+            print("[FafuRobot] mit_servo_j: target contains NaN/Inf, refused")
+            return False
+
+        # (a) user units -> rad (the SDK motor API is natively radians)
+        target_rad = arr.astype(float) if opts.is_radians else np.radians(arr)
+
+        # (b) per-step clamp against the last commanded MIT target
+        last = self._mit_last_target_rad
+        if last is None:
+            last = self._read_mit_positions()
+        if opts.max_step_rad and opts.max_step_rad > 0.0:
+            delta = target_rad - last
+            over = np.abs(delta) > opts.max_step_rad
+            if np.any(over):
+                target_rad = np.where(
+                    over, last + np.sign(delta) * opts.max_step_rad, target_rad)
+
+        # (c) feed-forward velocity (rad/s): (target - last) * rate_hz
+        if opts.feedforward_vel:
+            vel = (target_rad - last) * opts.rate_hz
+        else:
+            vel = np.zeros(self.num_joints, dtype=float)
+
+        kp_arr = self._broadcast_mit_gain(kp, "kp") if kp is not None else self._mit_kp
+        kd_arr = self._broadcast_mit_gain(kd, "kd") if kd is not None else self._mit_kd
+        tqe_arr = self._broadcast_mit_gain(tqe, "tqe") if tqe is not None else self._mit_tqe
+
+        # (d) one MIT command per joint, then a single bus flush
+        try:
+            for i, motor in enumerate(self._mit_motors):
+                motor.pos_vel_tqe_kp_kd(
+                    float(target_rad[i]),
+                    float(vel[i]),
+                    float(tqe_arr[i]),
+                    float(kp_arr[i]),
+                    float(kd_arr[i]),
+                )
+            self._mit_robot.motor_send_cmd()
+        except Exception as e:
+            print(f"[FafuRobot] mit_servo_j: send failed: {e}")
+            return False
+
+        self._mit_last_target_rad = target_rad
+        return True
+
+    def move_jntspace_path_mit(
+        self,
+        path,
+        *,
+        is_radians: bool = True,
+        opts: Optional[MitOpts] = None,
+        densify: bool = True,
+        start_frame_id: int = 0,
+        dry_run: bool = False,
+    ) -> None:
+        """Follow a joint-space path by streaming MIT frames one at a time.
+
+        This is the MIT-mode analogue of :meth:`move_jntspace_path` (the
+        "透传 / 依次下发关节角" streamer): each waypoint is densified into small
+        steps and streamed through :meth:`mit_servo_j` at ``opts.rate_hz``.
+
+        Parameters
+        ----------
+        path : array_like, shape (N, num_joints)
+            Joint configurations to traverse in order.
+        is_radians : bool, optional
+            Interpret ``path`` in radians (default) or degrees. Overrides
+            ``opts.is_radians`` for this call.
+        opts : MitOpts, optional
+            Per-call streaming tunables. When ``None`` the options captured by
+            :meth:`setup_mit_control` are reused.
+        densify : bool, optional
+            When ``True`` (default) linearly densify the (possibly sparse)
+            waypoints into ``max_step``-sized steps so the impedance law tracks
+            smoothly instead of chasing far-apart targets. ``max_step`` follows
+            ``opts.max_step_rad`` (or 0.03 rad if unset).
+        start_frame_id : int, optional
+            Skip the first ``start_frame_id`` frames (typically the robot's
+            current configuration). Default ``0``.
+        dry_run : bool, optional
+            Print the plan (frame count, rate) without commanding hardware.
+
+        Raises
+        ------
+        RuntimeError
+            :meth:`setup_mit_control` has not been called.
+        """
+        if not self.is_mit_ready or self._mit_opts is None:
+            raise RuntimeError(
+                "move_jntspace_path_mit: call setup_mit_control() first")
+        if path is None:
+            raise ValueError("path must not be None")
+
+        base = self._mit_opts
+        opts = MitOpts(**vars(opts)) if opts is not None else MitOpts(**vars(base))
+        opts.is_radians = is_radians
+
+        path_arr = np.asarray(path, dtype=float)
+        if path_arr.ndim != 2 or path_arr.shape[1] != self.num_joints:
+            raise ValueError(
+                f"path must have shape (N, {self.num_joints}); "
+                f"got {path_arr.shape}")
+
+        # Work in radians for densification, then re-express in the caller unit
+        # only at the send boundary (mit_servo_j converts again if needed).
+        path_rad = path_arr if is_radians else np.radians(path_arr)
+        if densify:
+            step = opts.max_step_rad if (opts.max_step_rad and opts.max_step_rad > 0.0) else 0.03
+            frames = _densify_jnt_path(path_rad, max_step=step)
+        else:
+            frames = path_rad
+        frames = np.asarray(frames, dtype=float)[start_frame_id:]
+
+        dt = 1.0 / opts.rate_hz
+        if dry_run:
+            print(f"[FafuRobot] move_jntspace_path_mit [DRY-RUN]: "
+                  f"{len(frames)} frames @ {opts.rate_hz:.0f}Hz "
+                  f"(~{len(frames) * dt:.2f}s), kp={self._mit_kp.tolist()}, "
+                  f"kd={self._mit_kd.tolist()}")
+            return
+
+        for jnt_rad in frames:
+            # mit_servo_j expects the caller unit; we hand it radians and force
+            # opts.is_radians via the session (frames are radians here).
+            ok = self.mit_servo_j(jnt_rad if opts.is_radians else np.degrees(jnt_rad))
+            if not ok:
+                print("[FafuRobot] move_jntspace_path_mit: frame rejected, aborting")
+                return
+            time.sleep(max(0.001, dt))
+
+    def mit_control_end(self, finish_mode: str = "brake") -> None:
+        """Release the MIT session and place the SDK Robot joints safely.
+
+        Parameters
+        ----------
+        finish_mode : {"brake", "stop", "hold"}, optional
+            * ``"brake"`` (default): short-circuit braking via
+              ``robot.set_stop`` fallback if a per-mode call is unavailable —
+              the joints resist motion without active torque.
+            * ``"stop"``: PWM off, joints free to be moved by hand.
+            * ``"hold"``: leave the last MIT frame commanding (motors stay
+              energised holding position). Use only briefly.
+
+        The SDK ``Robot`` handle is kept so the session can be resumed with a
+        fresh :meth:`setup_mit_control` if needed. The gripper is never
+        touched here.
+        """
+        if not self.is_mit_ready:
+            print("[FafuRobot] mit_control_end: MIT control not active, ignored")
+            return
+        valid = {"stop", "brake", "hold"}
+        if finish_mode not in valid:
+            raise ValueError(
+                f"finish_mode must be one of {sorted(valid)}, got {finish_mode!r}")
+
+        try:
+            if finish_mode == "hold":
+                # Re-send the last target with zero feed-forward velocity so
+                # the impedance law holds the current pose.
+                if self._mit_last_target_rad is not None:
+                    for i, motor in enumerate(self._mit_motors):
+                        motor.pos_vel_tqe_kp_kd(
+                            float(self._mit_last_target_rad[i]), 0.0,
+                            float(self._mit_tqe[i]),
+                            float(self._mit_kp[i]), float(self._mit_kd[i]),
+                        )
+                    self._mit_robot.motor_send_cmd()
+            elif finish_mode == "brake":
+                # Prefer a real brake if the binding exposes one; otherwise
+                # fall back to set_stop (free) which is the safest no-torque
+                # state available through the SDK Robot API.
+                for motor in self._mit_motors:
+                    brake = getattr(motor, "brake", None)
+                    if callable(brake):
+                        brake()
+                if any(not callable(getattr(m, "brake", None))
+                       for m in self._mit_motors):
+                    try:
+                        self._mit_robot.set_stop()
+                    except Exception:
+                        pass
+                else:
+                    self._mit_robot.motor_send_cmd()
+            else:  # "stop"
+                self._mit_robot.set_stop()
+        except Exception as e:
+            print(f"[FafuRobot] mit_control_end: {finish_mode} failed: {e}")
+        print(f"[FafuRobot] mit_control_end: MIT session released ({finish_mode}).")
 
     # ------------------------------------------------------------------
     #  Dynamics: gravity + friction compensation ("float" / teach mode)
@@ -2039,31 +2773,14 @@ class FafuRobotController:
                 last_t = tick_start
                 v_filt = v_alpha * v + (1.0 - v_alpha) * v_filt
                 absv = np.abs(v)
-                # ---- lead-through teach (debounced): a joint enters "dragging"
-                # only after SUSTAINED fast motion (`enter_time`), so momentary
-                # gravity stick-slip spikes can't ratchet the hold point down;
-                # while dragging its q_des follows the live pose (spring -> 0,
-                # weightless to move); once it stays slow for `settle_time` it
-                # locks q_des where you let go and the spring + integral hold it
-                # there.  A slow gravity sag never sustains above the threshold,
-                # so it is treated as "held" and the integral pulls it back out.
                 if hold_on_release and q_des_np is not None:
                     fast = absv > move_vel_thresh
                     fast_time = np.where(fast, fast_time + dt, 0.0)
                     slow_time = np.where(fast, 0.0, slow_time + dt)
-                    # sustained fast -> enter drag; sustained slow -> lock
                     dragging = np.where(fast_time >= enter_time, True, dragging)
                     dragging = np.where(slow_time >= settle_time, False, dragging)
                     q_des_np = np.where(dragging, q, q_des_np)
                     hold_mask = ~dragging
-                    # While dragging we FREEZE the integral (factor 1.0) rather
-                    # than zero it: the accumulated value ~= the gravity/friction
-                    # deficit, and keeping it means the joint already has its
-                    # holding torque the instant you let go, so it locks
-                    # immediately instead of sagging for seconds while the
-                    # integral rebuilds from scratch ("have to hold it for a
-                    # long time before it settles").  err~=0 during drag, so
-                    # this can't wind up.
                     integ_decay = 1.0
                 else:
                     hold_mask = absv < rest_thresh
@@ -2177,6 +2894,181 @@ class FafuRobotController:
     # ------------------------------------------------------------------
     #  Cartesian motion (placeholders)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    #  Kinematics (FK / IK)
+    # ------------------------------------------------------------------
+    #  These reuse the pinocchio model loaded by :meth:`setup_dynamics`
+    #  (a 6-DoF revolute chain whose joint order matches
+    #  :attr:`joint_motor_ids`).  Call ``setup_dynamics()`` once before
+    #  using forward_kinematics / inverse_kinematics / move_p / move_l.
+    #  The end-effector frame defaults to the model's last frame; override
+    #  it with :meth:`set_end_effector_frame` to target a specific TCP link.
+    # ------------------------------------------------------------------
+    def set_end_effector_frame(self, frame_name: str) -> None:
+        """Pick the pinocchio frame used as the end-effector (TCP).
+
+        Parameters
+        ----------
+        frame_name : str
+            A link / frame name present in the URDF loaded by
+            :meth:`setup_dynamics`.
+        """
+        if self._pin_model is None:
+            raise RuntimeError(
+                "set_end_effector_frame: call setup_dynamics() first "
+                "(it loads the URDF / pinocchio model)."
+            )
+        if not self._pin_model.existFrame(frame_name):
+            raise ValueError(
+                f"frame {frame_name!r} not in URDF; available frames: "
+                f"{[f.name for f in self._pin_model.frames]}"
+            )
+        self._ee_frame_id = self._pin_model.getFrameId(frame_name)
+        print(f"[FafuRobot] end-effector frame -> {frame_name} "
+              f"(id={self._ee_frame_id})")
+
+    def _ensure_kinematics(self) -> None:
+        """Validate that FK/IK can run; resolve the EE frame lazily."""
+        if not _PIN_EXIST:
+            raise RuntimeError(
+                "move_p / move_l / get_pose need the 'pinocchio' package "
+                "for kinematics, which is not installed.\n"
+                "  - conda:  conda install -c conda-forge pinocchio\n"
+                "Or compute joint angles externally and use move_j()."
+            )
+        if self._pin_model is None:
+            raise RuntimeError(
+                "kinematics model not loaded: call setup_dynamics() once "
+                "(it loads the URDF) before move_p / move_l / get_pose."
+            )
+        if self._ee_frame_id is None:
+            # Default to the last operational frame (usually the tool / tip).
+            self._ee_frame_id = self._pin_model.nframes - 1
+            print(f"[FafuRobot] end-effector frame not set; defaulting to "
+                  f"last frame '{self._pin_model.frames[self._ee_frame_id].name}'. "
+                  f"Use set_end_effector_frame() to target your TCP link.")
+
+    @staticmethod
+    def _rot_input_to_matrix(rot, is_euler: bool) -> np.ndarray:
+        """Coerce a rotation argument (matrix or RPY euler) to a 3x3 matrix."""
+        arr = np.asarray(rot, dtype=float)
+        if is_euler:
+            if arr.size != 3:
+                raise ValueError("Euler rotation must have three values")
+            if rm is not None:
+                return np.asarray(rm.rotmat_from_euler(*arr.reshape(3)), dtype=float)
+            # Fallback XYZ (roll-pitch-yaw) without wrs.basis.robot_math.
+            cr, sr = math.cos(arr[0]), math.sin(arr[0])
+            cp, sp = math.cos(arr[1]), math.sin(arr[1])
+            cy, sy = math.cos(arr[2]), math.sin(arr[2])
+            return np.array([
+                [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+                [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+                [-sp, cp * sr, cp * cr],
+            ])
+        if arr.shape != (3, 3):
+            raise ValueError("rot must be a 3x3 rotation matrix (or pass is_euler=True)")
+        return arr
+
+    def forward_kinematics(
+        self, joint_angles: Optional[Iterable[float]] = None
+    ) -> Dict[str, np.ndarray]:
+        """Compute end-effector pose from joint angles (radians).
+
+        Parameters
+        ----------
+        joint_angles : iterable of float, optional
+            ``num_joints`` joint angles in radians; uses the live
+            feedback (:meth:`get_joint_values`) when ``None``.
+
+        Returns
+        -------
+        dict
+            ``{'position': (3,), 'rotation': (3,3), 'transform': (4,4)}``.
+        """
+        self._ensure_kinematics()
+        if joint_angles is None:
+            joint_angles = self.get_joint_values()
+        q = np.asarray(list(joint_angles), dtype=float)
+        if q.size != self.num_joints:
+            raise ValueError(f"joint_angles must have {self.num_joints} values")
+        pin.forwardKinematics(self._pin_model, self._pin_data, q)
+        pin.updateFramePlacements(self._pin_model, self._pin_data)
+        oMf = self._pin_data.oMf[self._ee_frame_id]
+        position = np.asarray(oMf.translation, dtype=float).copy()
+        rotation = np.asarray(oMf.rotation, dtype=float).copy()
+        transform = np.eye(4)
+        transform[:3, :3] = rotation
+        transform[:3, 3] = position
+        return {"position": position, "rotation": rotation, "transform": transform}
+
+    def inverse_kinematics(
+        self,
+        target_position: Iterable[float],
+        target_rotation: Optional[np.ndarray] = None,
+        *,
+        init_q: Optional[Iterable[float]] = None,
+        max_iter: int = 200,
+        eps: float = 1e-3,
+        damping: float = 1e-2,
+    ) -> Optional[np.ndarray]:
+        """Damped least-squares (DLS) inverse kinematics.
+
+        Parameters
+        ----------
+        target_position : iterable of 3 float
+            Desired TCP position [x, y, z] in metres (base frame).
+        target_rotation : (3,3) array, optional
+            Desired TCP orientation; position-only when ``None``
+            (the current orientation is used as the goal so the solver
+            stays well-conditioned).
+        init_q : iterable of float, optional
+            Seed configuration; defaults to the live joint feedback.
+        max_iter, eps, damping : numeric
+            Solver iteration cap, convergence threshold (6-D error norm)
+            and DLS damping factor.
+
+        Returns
+        -------
+        np.ndarray or None
+            ``num_joints`` joint angles (rad), or ``None`` if it did not
+            converge (target likely unreachable).
+        """
+        self._ensure_kinematics()
+        target_position = np.asarray(list(target_position), dtype=float)
+        if target_rotation is None:
+            target_rotation = self.forward_kinematics(init_q)["rotation"]
+        oMdes = pin.SE3(np.asarray(target_rotation, dtype=float), target_position)
+
+        if init_q is None:
+            init_q = self.get_joint_values()
+        q = np.asarray(list(init_q), dtype=float).copy()
+        if q.size != self.num_joints:
+            raise ValueError(f"init_q must have {self.num_joints} values")
+
+        fid = self._ee_frame_id
+        dt = 1e-1
+        err_norm = float("inf")
+        for _ in range(int(max_iter)):
+            pin.forwardKinematics(self._pin_model, self._pin_data, q)
+            pin.updateFramePlacements(self._pin_model, self._pin_data)
+            iMd = self._pin_data.oMf[fid].actInv(oMdes)
+            err = pin.log(iMd).vector
+            err_norm = float(np.linalg.norm(err))
+            if err_norm < eps:
+                return q
+            J = pin.computeFrameJacobian(self._pin_model, self._pin_data, q, fid, pin.LOCAL)
+            J = -np.dot(pin.Jlog6(iMd.inverse()), J)
+            JJT = J.dot(J.T) + (damping ** 2) * np.eye(6)
+            try:
+                v = -J.T.dot(np.linalg.solve(JJT, err))
+            except np.linalg.LinAlgError:
+                return None
+            q = pin.integrate(self._pin_model, q, v * dt)
+        print(f"[FafuRobot] IK did not converge (final err={err_norm:.4f}); "
+              f"target may be out of reach.")
+        return None
+
     def move_p(
         self,
         pos: Iterable[float],
@@ -2184,24 +3076,46 @@ class FafuRobotController:
         *,
         is_euler: bool = False,
         speed: int = 50,
-    ) -> None:
-        """Move the end effector to a Cartesian pose (placeholder).
+        block: bool = True,
+        init_q: Optional[Iterable[float]] = None,
+    ) -> np.ndarray:
+        """Move the end effector to a Cartesian pose (IK + joint move).
 
-        Raises
-        ------
-        NotImplementedError
-            The Fafu stack ships motor-level controls only;
-            inverse kinematics must be supplied by the caller.  Once
-            an IK solver returns ``q`` (joint angles), feed it to
-            :meth:`move_j`.
+        Solves inverse kinematics for ``(pos, rot)`` then dispatches the
+        resulting joint target through :meth:`move_j`.  Requires
+        :meth:`setup_dynamics` (URDF / pinocchio) to have been called.
+
+        Parameters
+        ----------
+        pos : iterable of 3 float
+            Target TCP position [x, y, z] in metres.
+        rot : (3,3) array or 3 euler angles
+            Target orientation (rotation matrix, or RPY radians when
+            ``is_euler=True``).
+        is_euler : bool, optional
+            Treat ``rot`` as RPY euler angles instead of a matrix.
+        speed : int, optional
+            Speed percentage forwarded to :meth:`move_j`.
+        block : bool, optional
+            Block until the motion finishes.
+        init_q : iterable of float, optional
+            IK seed; defaults to the current configuration.
+
+        Returns
+        -------
+        np.ndarray
+            The joint solution that was commanded (rad).
         """
-        # TODO: plug in an external IK solver (e.g. wrs / pinocchio)
-        # to convert (pos, rot) -> joint targets, then dispatch via
-        # self.move_j(targets, ...).
-        raise NotImplementedError(
-            "FafuRobotController has no built-in IK; "
-            "compute joint angles externally and call move_j()."
-        )
+        rotmat = self._rot_input_to_matrix(rot, is_euler)
+        seed = self.get_joint_values() if init_q is None else init_q
+        q = self.inverse_kinematics(pos, rotmat, init_q=seed)
+        if q is None:
+            raise RuntimeError(
+                "move_p: IK failed for the requested pose "
+                "(unreachable or singular)."
+            )
+        self.move_j(q, is_radians=True, speed=speed, block=block)
+        return q
 
     def move_l(
         self,
@@ -2210,21 +3124,60 @@ class FafuRobotController:
         *,
         is_euler: bool = False,
         speed: int = 50,
+        eef_step: float = 0.005,
+        max_jntvel: Optional[List[float]] = None,
+        max_jntacc: Optional[List[float]] = None,
     ) -> None:
-        """Linear Cartesian motion (placeholder).
+        """Linear Cartesian motion: straight TCP line with SLERP orientation.
 
-        Raises
-        ------
-        NotImplementedError
-            See :meth:`move_p`.
+        Samples the line from the current TCP pose to ``(pos, rot)`` every
+        ``eef_step`` metres, solves IK for each waypoint and streams the
+        joint path through :meth:`move_jntspace_path`.  Requires
+        :meth:`setup_dynamics` (URDF / pinocchio).
+
+        Parameters
+        ----------
+        pos, rot, is_euler : see :meth:`move_p`.
+        speed : int, optional
+            Speed percentage forwarded to :meth:`move_jntspace_path`.
+        eef_step : float, optional
+            Cartesian sampling resolution in metres (default 5 mm).
+        max_jntvel, max_jntacc : list of float, optional
+            Per-joint limits forwarded to TOPPRA.
         """
-        # TODO: implement by sampling the Cartesian line, IK-ing each
-        # waypoint and feeding the resulting joint path to
-        # move_jntspace_path().
-        raise NotImplementedError(
-            "FafuRobotController has no built-in IK; "
-            "build a Cartesian-line waypoint list, IK each pose and "
-            "call move_jntspace_path()."
+        self._ensure_kinematics()
+        start = self.forward_kinematics()
+        start_pos, start_rot = start["position"], start["rotation"]
+        end_pos = np.asarray(list(pos), dtype=float)
+        end_rot = self._rot_input_to_matrix(rot, is_euler)
+
+        dist = float(np.linalg.norm(end_pos - start_pos))
+        n_steps = max(1, int(np.ceil(dist / max(eef_step, 1e-6))))
+        # Relative rotation as an axis-angle (so we can interpolate cleanly).
+        w_rel = pin.log3(start_rot.T @ end_rot)
+
+        path: List[np.ndarray] = []
+        seed = self.get_joint_values()
+        for k in range(1, n_steps + 1):
+            t = k / n_steps
+            wp_pos = (1.0 - t) * start_pos + t * end_pos
+            wp_rot = start_rot @ pin.exp3(t * w_rel)
+            q = self.inverse_kinematics(wp_pos, wp_rot, init_q=seed)
+            if q is None:
+                raise RuntimeError(
+                    f"move_l: IK failed at waypoint {k}/{n_steps} "
+                    f"(t={t:.2f}); Cartesian line not fully reachable."
+                )
+            path.append(q)
+            seed = q
+
+        self.move_jntspace_path(
+            path,
+            is_radians=True,
+            max_jntvel=max_jntvel,
+            max_jntacc=max_jntacc,
+            start_frame_id=0,
+            speed=speed,
         )
 
     # ------------------------------------------------------------------
@@ -2265,19 +3218,19 @@ class FafuRobotController:
         """Return raw :class:`MotorState` objects keyed by motor id."""
         return self._read_states(self._cfg.motor_ids, prefer_cache=prefer_cache)
 
-    def get_pose(self):
-        """Return end-effector pose (placeholder).
+    def get_pose(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Return the current end-effector pose ``(position, rotation)``.
 
-        Raises
-        ------
-        NotImplementedError
-            Forward kinematics are not built in; compute them from
-            :meth:`get_joint_values` using your URDF / wrs model.
+        Uses forward kinematics on the live joint feedback.  Requires
+        :meth:`setup_dynamics` (URDF / pinocchio) to have been called.
+
+        Returns
+        -------
+        tuple
+            ``(position (3,), rotation (3,3))`` in metres / rotation matrix.
         """
-        raise NotImplementedError(
-            "FafuRobotController has no built-in FK; "
-            "use get_joint_values() and an external kinematics model."
-        )
+        fk = self.forward_kinematics()
+        return fk["position"], fk["rotation"]
 
     # ------------------------------------------------------------------
     #  Gripper
@@ -2289,6 +3242,67 @@ class FafuRobotController:
     _GRIPPER_TOLERANCE_TURNS = 0.005          # ~ 1.8 deg
     _GRIPPER_STALL_VEL_TPS = 0.005            # < 1.8 deg/s ⇒ "not moving"
     _GRIPPER_STALL_PATIENCE_S = 0.3           # treat as done if stalled this long
+    # 与仿真 PantheraGripper.jaw_range 一致: ev_list 里 jaw_width 单位=米。
+    _JAW_WIDTH_OPEN_M = 0.08
+
+    def jaw_width_to_gripper_angle_rad(self, jaw_width_m: float) -> float:
+        """把 pkl/仿真里的 jaw_width(米) 映射到真机夹爪电机角(弧度)。
+
+        线性插值: 0 m -> 软限位下限(更负, 闭合), ``_JAW_WIDTH_OPEN_M`` -> 上限(张开)。
+        """
+        lo_t, hi_t = self._gripper_limit_turns()
+        if lo_t is None or hi_t is None:
+            lo_rad = math.radians(-114.984)
+            hi_rad = math.radians(-1.836)
+        else:
+            lo_rad = self._turns_to_rad(lo_t)
+            hi_rad = self._turns_to_rad(hi_t)
+        w_max = float(self._JAW_WIDTH_OPEN_M)
+        w = float(np.clip(jaw_width_m, 0.0, w_max))
+        alpha = w / w_max if w_max > 0 else 0.0
+        return lo_rad + (hi_rad - lo_rad) * alpha
+
+    def set_jaw_width(
+        self,
+        jaw_width_m: float,
+        effort: Optional[int] = None,
+        *,
+        vel: float = _GRIPPER_VEL_DEFAULT,
+        acc: float = _GRIPPER_ACC_DEFAULT,
+        block: bool = True,
+        timeout: float = 8.0,
+    ) -> None:
+        """按仿真/pkl 记录的开口宽度(米)驱动夹爪, 而非全开/全关。"""
+        angle = self.jaw_width_to_gripper_angle_rad(jaw_width_m)
+        self.gripper_control(
+            angle, effort,
+            is_radians=True, vel=vel, acc=acc,
+            block=block, timeout=timeout,
+        )
+
+    def actuate_gripper_from_pkl(
+        self,
+        action: str,
+        jaw_width_m: Optional[float] = None,
+        *,
+        effort: Optional[int] = None,
+        part_id: str = "",
+        arm_side: str = "",
+    ) -> None:
+        """按 pkl 夹爪动作执行: 有 jaw_width 则精确到位, 否则回退全开/全关。"""
+        if action not in ("close", "open"):
+            return
+        grip_txt = _grip_action_text(action, part_id)
+        prefix = f"    [{arm_side}]" if arm_side else "    "
+        if jaw_width_m is not None and np.isfinite(jaw_width_m):
+            print(f"{prefix} >>> {grip_txt}  jaw_width={float(jaw_width_m) * 1000:.1f}mm (按 pkl)")
+            self.set_jaw_width(float(jaw_width_m), effort=effort)
+        elif action == "close":
+            print(f"{prefix} >>> {grip_txt}")
+            self.close_gripper(effort=effort)
+        else:
+            print(f"{prefix} >>> {grip_txt}")
+            self.open_gripper(effort=effort)
 
     def gripper_control(
         self,
@@ -3318,6 +4332,387 @@ class FafuRobotController:
             raise RuntimeError("move_j aborted (abort_check returned True)")
         if rc == 2:
             print("[FafuRobot] warning: control loop exited abnormally")
+
+
+# ============================================================================
+#  Motion .pkl helpers (sealp tower trajectories)
+# ============================================================================
+def load_motion_pkl(pkl_path: str) -> dict:
+    """Load and lightly validate a sealp motion ``.pkl`` payload.
+
+    Parameters
+    ----------
+    pkl_path : str
+        Path to a ``.pkl`` saved by ``execute_layout_sequence_visual.py``.
+
+    Returns
+    -------
+    dict
+        The payload dict, guaranteed to contain a ``"steps"`` list.
+    """
+    if not os.path.isfile(pkl_path):
+        raise FileNotFoundError(f"motion pkl not found: {pkl_path}")
+    with open(pkl_path, "rb") as f:
+        payload = pickle.load(f)
+    if not isinstance(payload, dict) or "steps" not in payload:
+        raise ValueError(
+            f"{pkl_path!r} does not look like a sealp motion pkl "
+            f"(missing 'steps')."
+        )
+    return payload
+
+
+def extract_arm_segments(payload: dict, arm_side: str) -> List[dict]:
+    """Pull one arm's joint segments out of a motion payload, in step order.
+
+    Parameters
+    ----------
+    payload : dict
+        Result of :func:`load_motion_pkl`.
+    arm_side : {"lft", "rgt"}
+        Arm whose segments to keep.
+
+    Returns
+    -------
+    list of dict
+        Each item is ``{"step_id", "part_id", "jv" (N, num_joints) ndarray,
+        "ev" (N,) ndarray of jaw widths}``.  Empty segments are skipped.
+    """
+    out: List[dict] = []
+    for st in payload.get("steps", []):
+        for seg in st.get("segments", []):
+            if seg.get("arm_side") != arm_side:
+                continue
+            jv_list = seg.get("jv_list") or []
+            if not jv_list:
+                continue
+            jv = np.asarray(jv_list, dtype=float)
+            ev_raw = seg.get("ev_list") or []
+            ev = np.array(
+                [(_jaw_width_of(e) if e is not None else np.nan) for e in ev_raw],
+                dtype=float,
+            )
+            if ev.size < jv.shape[0]:
+                ev = np.concatenate([ev, np.full(jv.shape[0] - ev.size, np.nan)])
+            out.append({
+                "step_id": int(st.get("step_id", -1)),
+                "part_id": str(st.get("part_id", "")),
+                "jv": jv,
+                "ev": ev[: jv.shape[0]],
+            })
+    return out
+
+
+def _jaw_width_of(ev) -> float:
+    """Best-effort scalar jaw width from a serialized ev entry."""
+    if isinstance(ev, (int, float)):
+        return float(ev)
+    if isinstance(ev, dict):
+        for k in ("jaw_width", "width", "value", "ev"):
+            if k in ev:
+                try:
+                    return float(ev[k])
+                except (TypeError, ValueError):
+                    pass
+    try:
+        return float(np.asarray(ev, dtype=float).reshape(-1)[0])
+    except Exception:
+        return float("nan")
+
+
+def _grip_action_text(grip: Optional[str], pid: str) -> str:
+    """Human-readable gripper action for replay logs."""
+    if grip == "close":
+        return f"夹爪闭合 -> 抓住 [{pid}]"
+    if grip == "open":
+        return f"夹爪张开 -> 放下 [{pid}]"
+    return ""
+
+
+def _densify_jnt_path(path_arr: np.ndarray, max_step: float) -> np.ndarray:
+    """Linearly subdivide a sparse joint path into small fixed-size steps.
+
+    Used as a **safe** fallback when TOPPRA re-timing is unavailable or
+    fails (e.g. the Windows ``Buffer dtype mismatch INT_t/long`` issue, or
+    a too-short sub-path).  Streaming the original sparse waypoints sends
+    targets that are far apart, so a position-hold motor cannot reach one
+    before the next overwrites it -- the arm lurches / sags.  Densifying so
+    that no single joint moves more than ``max_step`` per commanded frame
+    keeps the target always just ahead of the arm, giving smooth tracking
+    and continuous holding torque.
+
+    Parameters
+    ----------
+    path_arr : (N, J) ndarray
+        Waypoints (radians or degrees -- ``max_step`` must use same unit).
+    max_step : float
+        Maximum per-joint change allowed between two consecutive output
+        frames.
+
+    Returns
+    -------
+    (M, J) ndarray with M >= N.
+    """
+    path_arr = np.asarray(path_arr, dtype=float)
+    if path_arr.shape[0] < 2:
+        return path_arr
+    out = [path_arr[0]]
+    for i in range(path_arr.shape[0] - 1):
+        a = path_arr[i]
+        b = path_arr[i + 1]
+        delta = b - a
+        nsteps = int(np.ceil(np.max(np.abs(delta)) / max(1e-9, max_step)))
+        nsteps = max(1, nsteps)
+        for k in range(1, nsteps + 1):
+            out.append(a + delta * (float(k) / nsteps))
+    return np.asarray(out, dtype=float)
+
+
+# 夹爪张开到位约 0.08m, 夹住零件时 < 0.05m。某些段(如 middle_plate)全程保持
+# 夹持宽度不变(无开合边界), 用此阈值判断"该段是否一直夹着零件"。
+_JAW_HELD_THRESH = 0.06
+_JAW_WIDTH_MIN_M = 0.0
+
+
+def apply_jaw_close_delta(
+    payload: dict,
+    delta_m: float,
+    *,
+    open_thresh: float = _JAW_HELD_THRESH,
+    min_width_m: float = _JAW_WIDTH_MIN_M,
+) -> int:
+    """就地把 payload 里所有「夹持/闭合」帧的 jaw_width 加上 delta_m(负=更紧)。
+
+    仅修改 width < open_thresh 的帧(典型夹持 ~0.04m); 张开位(~0.08m)不变。
+    返回修改的帧数。
+    """
+    if not delta_m:
+        return 0
+    n = 0
+    for st in payload.get("steps", []):
+        for seg in st.get("segments", []):
+            ev_list = seg.get("ev_list") or []
+            new_list = []
+            for ev in ev_list:
+                w = _jaw_width_of(ev)
+                if np.isfinite(w) and w < open_thresh:
+                    nw = max(min_width_m, float(w) + float(delta_m))
+                    new_list.append(nw)
+                    n += 1
+                else:
+                    new_list.append(ev)
+            seg["ev_list"] = new_list
+    return n
+
+
+def _resolve_home_between(home_between: Optional[object]):
+    """解析 home_between: None=不回; \"all\"=每个零件后回; 否则=零件 id 集合。"""
+    if home_between is None:
+        return False, set()
+    home_all = isinstance(home_between, str) and home_between.lower() == "all"
+    home_set = set() if home_all else set(home_between)
+    return home_all, home_set
+
+
+def should_home_after_part(part_id: str, home_between: Optional[object]) -> bool:
+    """该零件完成后是否应先回 home 再去下一个零件。"""
+    home_all, home_set = _resolve_home_between(home_between)
+    return home_all or part_id in home_set
+
+
+def _ev_width_at(ev: np.ndarray, idx: int) -> Optional[float]:
+    """从 ev 数组取第 idx 帧的 jaw_width(米); 无效则 None。"""
+    if idx < 0 or idx >= ev.size:
+        return None
+    w = ev[idx]
+    if not np.isfinite(w):
+        return None
+    return float(w)
+
+
+def _split_path_by_gripper(jv: np.ndarray, ev: np.ndarray,
+                           thresh: float,
+                           held_jaw_thresh: float = _JAW_HELD_THRESH) -> List[dict]:
+    """Split a joint path at gripper width changes.
+
+    Returns a list of ``{"path": (k, num_joints) ndarray, "gripper":
+    None|"open"|"close"}``: the gripper action (if any) is meant to fire
+    *after* that sub-path finishes.
+
+    Special case — *held* segment with no width change: some steps (e.g.
+    ``middle_plate``) keep a constant **closed** jaw width for the whole
+    segment because the grasp happened at the first frame and the release
+    at the last frame, neither recorded as a width *change*. Without
+    synthesizing them the gripper would never grab/release the part. So a
+    constant-held segment is split into ``[{frame0 -> close}, {full path ->
+    open}]``: grasp at the start pose, stream the carry path, release at
+    the end pose.
+    """
+    n = jv.shape[0]
+    if n == 0:
+        return []
+    # Find frames where the (finite) jaw width changes meaningfully.
+    boundaries: List[int] = []
+    actions: Dict[int, str] = {}
+    last = None
+    for i in range(n):
+        w = ev[i] if i < ev.size else np.nan
+        if not np.isfinite(w):
+            continue
+        if last is not None and abs(w - last) >= thresh:
+            boundaries.append(i)
+            actions[i] = "close" if w < last else "open"
+        last = w
+    if not boundaries:
+        finite = ev[np.isfinite(ev)] if ev.size else np.array([])
+        held = finite.size > 0 and float(np.median(finite)) < held_jaw_thresh
+        if held and n >= 2:
+            # 整段都夹着零件: 首帧抓取(闭合), 全程搬运后末帧放下(张开)。
+            return [
+                {"path": jv[0:1], "gripper": "close", "jaw_width": _ev_width_at(ev, 0)},
+                {"path": jv, "gripper": "open", "jaw_width": _ev_width_at(ev, n - 1)},
+            ]
+        return [{"path": jv, "gripper": None}]
+
+    subpaths: List[dict] = []
+    start = 0
+    for b in boundaries:
+        subpaths.append({
+            "path": jv[start:b],
+            "gripper": actions[b],
+            "jaw_width": _ev_width_at(ev, b),
+        })
+        start = b
+    subpaths.append({"path": jv[start:], "gripper": None})
+    return [sp for sp in subpaths if sp["path"].shape[0] > 0]
+
+
+def replay_dual_arm_motion_pkl(
+    lft_arm: Optional["FafuRobotController"],
+    rgt_arm: Optional["FafuRobotController"],
+    pkl_path: str,
+    *,
+    speed: int = 30,
+    dry_run: bool = True,
+    payload: Optional[dict] = None,
+    **kwargs,
+) -> None:
+    """Step-ordered dual-arm replay of a tower motion ``.pkl``.
+
+    Iterates the assembly **steps in order** and dispatches each step's
+    segment(s) to the matching controller (``lft_arm`` / ``rgt_arm``).
+    Most tower steps are single-arm; a step that lists *both* arms is a
+    true handover and is flagged (the naive sequential replay here does
+    **not** synchronise the two-arm grasp hand-off — handle those steps
+    manually / with a coordinated controller).
+
+    Parameters
+    ----------
+    lft_arm, rgt_arm : FafuRobotController or None
+        Controllers for the left / right physical arm.  Pass ``None`` for
+        an arm you are not driving (its steps are skipped with a warning).
+    pkl_path : str
+        Path to the tower motion ``.pkl``.
+    speed : int, optional
+        Speed percentage forwarded to each per-segment replay.
+    dry_run : bool, optional
+        Print the plan without commanding hardware.  Defaults to ``True``
+        for safety — set ``False`` to actually move.
+    kwargs :
+        Forwarded to :meth:`FafuRobotController.run_motion_pkl` (e.g.
+        ``grip_effort``, ``settle_s``, ``max_jntvel``).
+    """
+    home_between = kwargs.pop("home_between", "all")
+    home_between_speed = kwargs.pop("home_between_speed", 25)
+    step_pause_s = kwargs.pop("step_pause_s", 0.0)
+    if payload is None:
+        payload = load_motion_pkl(pkl_path)
+    ctrls = {"lft": lft_arm, "rgt": rgt_arm}
+    all_steps = payload.get("steps", [])
+    home_all, home_set = _resolve_home_between(home_between)
+    print(f"[FafuRobot] 双臂回放: 共 {len(all_steps)} 步"
+          + (f" home_between={'all' if home_all else sorted(home_set)}"
+             if (home_all or home_set) else " home_between=off")
+          + ("  [DRY-RUN]" if dry_run else ""))
+    for idx, st in enumerate(all_steps, 1):
+        sides = st.get("arm_sides") or [
+            s.get("arm_side") for s in st.get("segments", [])
+        ]
+        distinct = [s for i, s in enumerate(sides) if s and s not in sides[:i]]
+        pid = st.get('part_id', '')
+        if st.get("handover") or len(distinct) > 1:
+            print(f"\n[第 {idx}/{len(all_steps)} 步] 零件 [{pid}]  "
+                  f"*** 真换手 ({'+'.join(distinct)}) — 需手动双臂同步, 跳过自动回放 ***")
+            continue
+        side = distinct[0] if distinct else None
+        arm_name = {"lft": "左臂", "rgt": "右臂"}.get(side, side)
+        ctrl = ctrls.get(side)
+        if ctrl is None:
+            print(f"\n[第 {idx}/{len(all_steps)} 步] 零件 [{pid}]  "
+                  f"arm={side}: 未绑定控制器, 跳过。")
+            continue
+        print(f"\n[第 {idx}/{len(all_steps)} 步] {arm_name}({side}) 抓取并安装 零件 [{pid}]")
+        # Replay just this step by feeding a one-step sub-payload.
+        sub = {"steps": [st]}
+        # run_motion_pkl reads from a path; build an in-memory shim via a
+        # temporary extract instead of re-pickling.
+        for seg in extract_arm_segments(sub, side):
+            ctrl_segments = [seg]
+            _replay_extracted_segments(ctrl, ctrl_segments, side, speed=speed,
+                                       dry_run=dry_run, **kwargs)
+        if idx < len(all_steps):
+            nxt_pid = all_steps[idx].get("part_id", "")
+            do_home = should_home_after_part(pid, home_between)
+            if step_pause_s > 0 and not dry_run:
+                via = "先回 home 再去" if do_home else "直接前往(不回 home)"
+                print(f"    [{side}] —— 零件 [{pid}] 完成, 停顿 {step_pause_s:.1f}s "
+                      f"后{via}下一步 [{nxt_pid}] ——")
+                time.sleep(step_pause_s)
+            if do_home and not dry_run:
+                print(f"    [{side}] 零件 [{pid}] 后先回到 home (speed={home_between_speed}), "
+                      f"再去下一步 [{nxt_pid}] ...")
+                ctrl.go_home(speed=home_between_speed)
+            elif do_home:
+                print(f"    [{side}] (dry-run) 零件 [{pid}] 后将回 home 再去 [{nxt_pid}]")
+
+
+def _replay_extracted_segments(ctrl: "FafuRobotController", segments: List[dict],
+                               arm_side: str, *, speed: int, dry_run: bool,
+                               actuate_gripper: bool = True,
+                               grip_change_thresh: float = 0.003,
+                               grip_effort: Optional[int] = None,
+                               settle_s: float = 0.4,
+                               max_jntvel: Optional[List[float]] = None,
+                               max_jntacc: Optional[List[float]] = None,
+                               control_frequency: float = 0.05) -> None:
+    """Shared per-segment replay used by the dual-arm orchestrator."""
+    do_grip = actuate_gripper and ctrl.has_gripper
+    for seg in segments:
+        jv, ev = seg["jv"], seg["ev"]
+        pid = seg.get("part_id", "")
+        for sp in _split_path_by_gripper(jv, ev, grip_change_thresh):
+            path = sp["path"]
+            grip = sp["gripper"]
+            grip_txt = _grip_action_text(grip, pid)
+            if dry_run:
+                print(f"    [{arm_side}] [{pid}] 移动 {len(path)} 帧"
+                      + (f"  ->  {grip_txt}" if grip else ""))
+                continue
+            print(f"    [{arm_side}] [{pid}] 移动到位 ({len(path)} 帧)...")
+            if len(path) >= 2:
+                ctrl.move_jntspace_path(path, is_radians=True,
+                                        max_jntvel=max_jntvel,
+                                        max_jntacc=max_jntacc,
+                                        start_frame_id=0, speed=speed,
+                                        control_frequency=control_frequency)
+            elif len(path) == 1:
+                ctrl.move_j(path[0], is_radians=True, speed=speed, block=True)
+            time.sleep(settle_s)
+            if do_grip and grip in ("close", "open"):
+                ctrl.actuate_gripper_from_pkl(
+                    grip, sp.get("jaw_width"),
+                    effort=grip_effort, part_id=pid, arm_side=arm_side,
+                )
 
 
 # ============================================================================

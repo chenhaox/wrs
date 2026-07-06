@@ -55,7 +55,7 @@ def main():
         obj_cmodel.attach_to(base)
 
     gripper = pg.PantheraGripper()
-    max_show = 300
+    max_show = 10
 
 
     print("\n" + "=" * 60)

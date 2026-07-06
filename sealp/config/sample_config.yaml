@@ -35,8 +35,8 @@ environment:
   obstacles:
     - name: "work_table"
       type: "box"
-      extent: [0.8, 1.2, 0.02]
-      pos: [0.345, -0.35 ,-0.01]
+      extent: [0.6, 1.2, 0.02]
+      pos: [0.23, -0.35 ,-0.01]
       rgba: [0.55, 0.45, 0.35, 0.8]
 
 #    - name: "back_wall"

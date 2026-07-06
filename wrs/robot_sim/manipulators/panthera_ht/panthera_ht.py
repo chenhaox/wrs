@@ -9,6 +9,7 @@ import wrs.modeling.collision_model as mcm
 
 try:
     from trac_ik.trac_ik import TracIK
+
     _HAS_TRAC_IK = True
 except Exception:
     _HAS_TRAC_IK = False
@@ -214,9 +215,9 @@ if __name__ == '__main__':
 
     arm = PantheraHT(enable_cc=True)
 
-    test_conf = np.array([0.0, 90, 90, 0.0, 0.0, 0.0])
+    test_conf = np.array([0, 0, 0, 0, 0, 0])
     arm.goto_given_conf(jnt_values=test_conf)
 
-    arm.gen_meshmodel(toggle_cdprim=True,toggle_jnt_frames=True, toggle_tcp_frame=True).attach_to(base)
+    arm.gen_meshmodel(toggle_jnt_frames=True, toggle_tcp_frame=False).attach_to(base)
     print(arm.is_collided())
     base.run()

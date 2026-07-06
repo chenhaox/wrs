@@ -24,8 +24,8 @@
 4. middle_plate **直接走双臂换手**（跳过单臂 pick-place，需预生成 hopg）：
    - ``tower_handover/middle_plate_hopg.pickle``
    - 生成命令：``python -m sealp.examples.grasp.gen_middle_plate_regrasp_data``
-5. 默认使用 mesh/triangles 碰撞，不用 box。
-   - 想加速可以用 --cdprim-type box。
+5. 默认使用 **box（AABB 包围盒）** 做避障碰撞，比 mesh/triangles 更快、更保守。
+   - 需要更精细碰撞可传 ``--cdprim-type triangles``。
 6. 运输障碍与落位接触豁免分离：
    - middle_plate 运输过程中会把四根柱子作为动态障碍，减少动画穿模；
    - 最终落位/插接附近仍保留必要的接触豁免。
@@ -37,6 +37,7 @@
 8. 全部步骤成功后保存运动路径 pkl，下次可直接缓存回放：
    - 默认缓存路径：sealp/examples/motion/_output/{layout名}_motions.pkl
    - 强制重算：--replan
+   - 直接读缓存(不重规划)：不加 --replan，参数需与保存时一致(尤其 --cdprim-type)
 
 推荐放置路径：
     sealp/examples/motion/execute_layout_sequence_visual.py
@@ -60,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import hashlib
 import json
 import os
@@ -119,23 +121,29 @@ DEFAULT_CONFIG = os.path.join(SEALP_ROOT, "config", "sample_config.yaml")
 DEFAULT_GRASP_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_grasp")
 DEFAULT_HANDOVER_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_handover")
 DEFAULT_MOTION_CACHE_DIR = os.path.join(SEALP_ROOT, "examples", "motion", "_output")
-MOTION_CACHE_FORMAT_VERSION = "2.2"
+MOTION_CACHE_FORMAT_VERSION = "2.4"
 
-# middle_plate 直接走换手，不走单臂 pick-place
+# middle_plate 直接走换手，不走单臂 pick-place（默认关，见 --middle-plate-handover）
 HANDOVER_PART_IDS = frozenset({"middle_plate"})
 
+# 免直线落位的零件: 这些件被周围已装件(如四根立柱)包围, 标准 pick-place 强制走的
+# 直线 approach/depart 一定会撞。对它们把 pick/place 的 approach/depart 直线距离全
+# 设为 0 → 直线段退化成"只在抓取位做一次 IK", 取放之间仍走 RRT(可绕柱), 从而单臂
+# 也能放进去(等价于之前换手退化路径里 toggle_start_approach/end_depart=False 的效果)。
+NOLINEAR_PART_IDS = frozenset({"middle_plate"})
+
 
 # ============================================================
-# 规划参数：默认 mesh / triangles
+# 规划参数：默认 box 避障碰撞（AABB 包围盒）
 # ============================================================
 
-DUAL_ARM_Y_OFFSET = 0.62
+DUAL_ARM_Y_OFFSET = 0.6
 HOME_JV = np.zeros(6)
 
 APPROACH_DIST = 0.0
-PICK_DEPART_DIST = 0.02
-PLACE_APPROACH_DIST = 0.02
-PLACE_DEPART_DIST = 0.05
+PICK_DEPART_DIST = 0.06
+PLACE_APPROACH_DIST = 0.06
+PLACE_DEPART_DIST = 0.07
 LINEAR_GRANULARITY = 0.04
 
 # 多方向候选的水平倾斜量
@@ -146,8 +154,16 @@ RRT_EXT_DIST = 0.30
 RRT_SMOOTHING_N_ITER = 150
 RRT_MAX_TIME = 10.0
 
-# 默认使用 mesh/triangles
-DEFAULT_CDPRIM_TYPE = "triangles"
+# 最后一件放置完成后的收尾策略：
+# 1) 识别夹爪由闭合变为张开的 release 帧；
+# 2) 只保留极短的原始脱离前缀，删除 TransportPrimitive 自动追加的长撤离尾巴；
+# 3) 从第一个无碰撞的脱离帧重新用 RRT-Connect 规划到 HOME。
+FINAL_RELEASE_HOLD_FRAMES = 3
+FINAL_HOME_MAX_CLEARANCE_FRAMES = 8
+FINAL_HOME_RRT_MAX_TIME = 10.0
+
+# 默认使用 box（AABB）；triangles 更精细但更慢
+DEFAULT_CDPRIM_TYPE = "box"
 
 
 # ============================================================
@@ -187,9 +203,84 @@ class ExecutionSummary:
 
 @dataclass
 class _AnimMotionData:
-    """Handover 多段 MotionData 合并后的动画载体。"""
+    """动画载体。mesh_list 可以是真 list，也可以是惰性序列。"""
 
-    mesh_list: list
+    mesh_list: object
+
+
+class _LazyCachedMeshList:
+    """按需生成缓存回放帧，避免启动时一次性构建全部 mesh。
+
+    旧逻辑会在读取 pkl 后立即把所有关节帧都转成 Panda3D mesh，
+    对 100+ 帧的装配动画很容易造成卡顿、黑屏或显存压力。
+    这个序列只保存轻量的关节角/物体位姿，在用户按 SPACE 到某一帧时
+    才生成该帧 mesh，并且只保留很少的最近帧。
+    """
+
+    def __init__(self, runner, part_id: str, frame_states: List[dict], max_keep: int = 1):
+        self.runner = runner
+        self.part_id = part_id
+        self.frame_states = list(frame_states)
+        self.max_keep = max(0, int(max_keep))
+        self._cache: Dict[int, object] = {}
+        self._order: List[int] = []
+
+    def __len__(self):
+        return len(self.frame_states)
+
+    def __bool__(self):
+        return len(self.frame_states) > 0
+
+    def __iter__(self):
+        for i in range(len(self.frame_states)):
+            yield self[i]
+
+    def _remember(self, idx: int, frame) -> None:
+        if self.max_keep <= 0:
+            return
+        self._cache[idx] = frame
+        self._order.append(idx)
+        while len(self._order) > self.max_keep:
+            old_idx = self._order.pop(0)
+            old_frame = self._cache.pop(old_idx, None)
+            if old_frame is not frame:
+                try:
+                    old_frame.detach()
+                except Exception:
+                    pass
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [self[i] for i in range(*idx.indices(len(self)))]
+        if idx < 0:
+            idx += len(self.frame_states)
+        if idx < 0 or idx >= len(self.frame_states):
+            raise IndexError(idx)
+        if idx in self._cache:
+            return self._cache[idx]
+
+        st = self.frame_states[idx]
+        frame = _make_cached_dual_frame(
+            self.runner,
+            st["lft_jv"],
+            st["rgt_jv"],
+            lft_ee=st.get("lft_ee"),
+            rgt_ee=st.get("rgt_ee"),
+            active_sides=st.get("active_sides"),
+        )
+        obj_pose = st.get("obj_pose")
+        if frame is not None and obj_pose is not None:
+            obj_pos, obj_rot = obj_pose
+            _attach_object_at_pose_to_frame(
+                frame,
+                self.runner.asm,
+                self.part_id,
+                pos=obj_pos,
+                rotmat=obj_rot,
+                cdprim_type=self.runner.cdprim_type,
+            )
+        self._remember(idx, frame)
+        return frame
 
 
 class _QuietHandoverPlanner(horeg.HandoverPlanner):
@@ -209,6 +300,68 @@ def _merge_motion_mesh_list(motion_list: List) -> _AnimMotionData:
     for md in motion_list:
         mesh_list.extend(getattr(md, "mesh_list", []) or [])
     return _AnimMotionData(mesh_list=mesh_list)
+
+
+def _slice_motion_data_inplace(md, start: int = 0, stop: Optional[int] = None) -> None:
+    """原地裁剪 MotionData 的所有逐帧字段，保持 jv/ev/mesh/物体位姿严格对齐。"""
+    if md is None:
+        return
+    fields = ("_jv_list", "_ev_list", "_mesh_list", "_oiee_gl_pose_list")
+    for attr in fields:
+        seq = getattr(md, attr, None)
+        if seq is None:
+            continue
+        try:
+            setattr(md, attr, list(seq[start:stop]))
+        except Exception:
+            pass
+
+
+def _ev_to_scalar(ev) -> Optional[float]:
+    """把 jaw width/ee value 尽量转成一个可比较标量。"""
+    if ev is None:
+        return None
+    try:
+        if np.isscalar(ev):
+            return float(ev)
+    except Exception:
+        pass
+    try:
+        arr = np.asarray(ev, dtype=float).reshape(-1)
+        if arr.size:
+            return float(arr[0])
+    except Exception:
+        pass
+    return None
+
+
+def _find_release_frame(md) -> Optional[int]:
+    """寻找“夹爪闭合后重新张开”的第一帧，用于删除最后一件的多余撤离尾巴。"""
+    jv_list = list(getattr(md, "jv_list", None) or [])
+    ev_list = _extract_ev_list(md)
+    if not jv_list or not ev_list:
+        return None
+
+    values = [_ev_to_scalar(ev) for ev in ev_list]
+    valid = [v for v in values if v is not None]
+    if len(valid) < 2:
+        return None
+
+    v_min, v_max = min(valid), max(valid)
+    # 正常夹爪应存在明显的开合差；差值太小则不做误判。
+    if v_max - v_min < 1e-4:
+        return None
+    threshold = v_min + 0.55 * (v_max - v_min)
+
+    seen_closed = False
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        if v < threshold:
+            seen_closed = True
+        elif seen_closed and v >= threshold:
+            return i
+    return None
 
 
 def _apply_motion_end_states(motion_list: List) -> None:
@@ -560,18 +713,27 @@ def _unit_vec(v) -> np.ndarray:
 def make_collision_model(mesh_path: str, cdprim_type: str = DEFAULT_CDPRIM_TYPE):
     """创建 CollisionModel。
 
-    默认 cdprim_type="triangles"，也就是 mesh 碰撞。
-    如果当前 WRS 版本不支持 triangles，则自动回退默认构造。
+    cdprim_type="box"/"aabb"：AABB 包围盒碰撞（规划默认，快且保守）；
+    cdprim_type="triangles"：三角 mesh 碰撞（更精细但慢）。
     """
-    cdprim_type = str(cdprim_type or "triangles")
+    requested = str(cdprim_type or DEFAULT_CDPRIM_TYPE).lower()
+    if requested in ("bbox", "bounding_box", "bounding-box", "aabb_box"):
+        requested = "box"
 
     trials = []
-    if cdprim_type not in ("default", "none", ""):
-        trials.append({"initor": mesh_path, "cdprim_type": cdprim_type})
-    if cdprim_type != "triangles":
-        trials.append({"initor": mesh_path, "cdprim_type": "triangles"})
-    trials.append({"initor": mesh_path})
-    trials.append({"initor": mesh_path, "cdprim_type": "convex_hull"})
+    if requested in ("box", "aabb", "obb"):
+        for t in ("box", "aabb", "obb"):
+            trials.append({"initor": mesh_path, "cdprim_type": t})
+        trials.append({"initor": mesh_path})
+        trials.append({"initor": mesh_path, "cdprim_type": "convex_hull"})
+    elif requested in ("default", "none", ""):
+        trials.append({"initor": mesh_path})
+        trials.append({"initor": mesh_path, "cdprim_type": "convex_hull"})
+    else:
+        trials.append({"initor": mesh_path, "cdprim_type": requested})
+        if requested != "convex_hull":
+            trials.append({"initor": mesh_path, "cdprim_type": "convex_hull"})
+        trials.append({"initor": mesh_path})
 
     last_err = None
     for kw in trials:
@@ -586,16 +748,18 @@ def make_collision_model(mesh_path: str, cdprim_type: str = DEFAULT_CDPRIM_TYPE)
                     cm = mcm.CollisionModel(mesh_path, cdprim_type=kw["cdprim_type"])
                     cm._sealp_cdprim_type = kw["cdprim_type"]
                     return cm
-                else:
-                    cm = mcm.CollisionModel(mesh_path)
-                    cm._sealp_cdprim_type = "default"
-                    return cm
+                cm = mcm.CollisionModel(mesh_path)
+                cm._sealp_cdprim_type = "default"
+                return cm
             except Exception as ee:
                 last_err = ee
         except Exception as e:
             last_err = e
 
-    raise RuntimeError(f"无法创建 CollisionModel: {mesh_path}, last_err={last_err!r}")
+    raise RuntimeError(
+        f"无法创建 CollisionModel: {mesh_path}, cdprim_type={cdprim_type}, "
+        f"last_err={last_err!r}"
+    )
 
 
 def load_env_obstacles(config_path: str, base=None) -> List:
@@ -718,10 +882,12 @@ def _load_json_map(text: str) -> Dict[str, str]:
     return dict(json.loads(text))
 
 
-def _motion_candidate_kwargs(pid: str, arm_tag: str):
+def _motion_candidate_kwargs(pid: str, arm_tag: str, *, skip_place_depart: bool = False):
     """多套 pick/place 接近撤离方向候选。
 
     先试纯 Z，再试带一点水平偏置的方向。
+    skip_place_depart: 最后一件(如 top_cross)放置后不再做 place_depart 撤离段,
+    避免 pkl/动画末尾出现一段多余的"类似 middle_plate 附近"的关节角。
     """
     t = float(MOTION_TILT)
 
@@ -740,6 +906,12 @@ def _motion_candidate_kwargs(pid: str, arm_tag: str):
 
     spec_map = {name: (pd, pa, pld) for name, pd, pa, pld in specs}
 
+    # 免直线落位件: 直线段距离全 0, 取放间仍走 RRT 绕障
+    no_linear = pid in NOLINEAR_PART_IDS
+    pick_dep_d = 0.0 if no_linear else PICK_DEPART_DIST
+    place_app_d = 0.0 if no_linear else PLACE_APPROACH_DIST
+    place_dep_d = 0.0 if (no_linear or skip_place_depart) else PLACE_DEPART_DIST
+
     out = []
     for name in order:
         pd, pa, pld = spec_map[name]
@@ -747,14 +919,48 @@ def _motion_candidate_kwargs(pid: str, arm_tag: str):
             name,
             dict(
                 pick_depart_direction=_unit_vec(pd),
-                pick_depart_distance=PICK_DEPART_DIST,
+                pick_depart_distance=pick_dep_d,
                 place_approach_direction_list=[_unit_vec(pa)],
-                place_approach_distance_list=[PLACE_APPROACH_DIST],
+                place_approach_distance_list=[place_app_d],
                 place_depart_direction_list=[_unit_vec(pld)],
-                place_depart_distance_list=[PLACE_DEPART_DIST],
+                place_depart_distance_list=[place_dep_d],
             )
         ))
     return out
+
+
+def _last_assembly_part_id(part_order: List[str], layout: WorkspaceLayout) -> Optional[str]:
+    """装配顺序里最后一个需要规划的零件(跳过 preassembled 如 base_plate)。"""
+    for pid in reversed(part_order):
+        if _is_preassembled(pid, layout):
+            continue
+        return pid
+    return None
+
+
+def _goto_home_sim(runner, base=None) -> None:
+    """仿真里把双臂回到 home 并可选显示 home 姿态 mesh。"""
+    if runner is None:
+        return
+    try:
+        runner.robot.lft_arm.goto_given_conf(HOME_JV)
+        runner.robot.rgt_arm.goto_given_conf(HOME_JV)
+    except Exception:
+        pass
+    if base is not None:
+        try:
+            prev = getattr(runner, "_home_pose_mesh", None)
+            if prev is not None:
+                try:
+                    prev.detach()
+                except Exception:
+                    pass
+            mesh = runner.robot.gen_meshmodel(alpha=0.45)
+            mesh.attach_to(base)
+            runner._home_pose_mesh = mesh
+        except Exception as e:
+            print(f"[WARN] home 姿态 mesh 显示失败: {type(e).__name__}: {e}")
+    print("[HOME] 全部零件放置完成，机械臂回到 home。")
 
 
 def _arm_try_order(pid: str, preferred: Optional[str]) -> List[str]:
@@ -922,14 +1128,24 @@ def _detect_carry_start_by_pose(mesh_list: List, staging_pos: Optional[np.ndarra
     return None
 
 
+_ANIME_RELEASE_COUNTER = 0
+
+
 def _hard_release_mesh(mesh) -> None:
-    """释放上一帧。这里只 detach，不 remove，避免共享 NodePath 被提前销毁。"""
+    """释放上一帧，并周期性触发 GC，降低长动画回放时的内存压力。"""
+    global _ANIME_RELEASE_COUNTER
     if mesh is None:
         return
     try:
         mesh.detach()
     except Exception:
         pass
+    _ANIME_RELEASE_COUNTER += 1
+    if _ANIME_RELEASE_COUNTER % 40 == 0:
+        try:
+            gc.collect()
+        except Exception:
+            pass
 
 
 def animate_success_steps(
@@ -938,6 +1154,7 @@ def animate_success_steps(
     runner=None,
     interval: float = 0.03,  # 保留参数仅为向后兼容，已不再使用 task tick。
     auto_play: bool = False,  # 保留参数仅为向后兼容，自动播放已彻底关闭。
+    frame_stride: int = 1,    # >1 时每按一次 SPACE 跳 N 帧，减少重型 mesh 上传次数。
 ):
     """SPACE 驱动播放：按一次推进一帧；全部播放完后再按 SPACE 重新开始。
 
@@ -949,6 +1166,7 @@ def animate_success_steps(
     循环播放：所有 step 播完后，恢复 staging 颜色块、清掉 assembled 实心件，
     下一次按 SPACE 重新从头播。
     """
+    stride = max(1, int(frame_stride))
     if not step_motions:
         print("\n无成功轨迹可播放：仅显示初始布局、目标 ghost 和机械臂。")
         return
@@ -979,7 +1197,7 @@ def animate_success_steps(
     phases = []
 
     print("\n========== 动画控制 ==========")
-    print("  按 SPACE 推进一帧；全部播放完后再按 SPACE 重新开始（循环）。")
+    print(f"  按 SPACE 推进 {stride} 帧；全部播放完后再按 SPACE 重新开始（循环）。")
     print(f"  可播放成功步骤数：{len(motion_items)}")
 
     for sm in motion_items:
@@ -1054,7 +1272,7 @@ def animate_success_steps(
             pass
 
     class _AnimeState:
-        __slots__ = ("step_idx", "frame_idx", "last_attached", "finished", "loop_count")
+        __slots__ = ("step_idx", "frame_idx", "last_attached", "finished", "loop_count", "home_done")
 
         def __init__(self):
             self.step_idx = 0
@@ -1062,6 +1280,7 @@ def animate_success_steps(
             self.last_attached = None
             self.finished = False
             self.loop_count = 0
+            self.home_done = False
 
     st = _AnimeState()
 
@@ -1101,6 +1320,7 @@ def animate_success_steps(
         st.step_idx = 0
         st.frame_idx = 0
         st.finished = False
+        st.home_done = False
         st.loop_count += 1
         print(f"\n[动画] 开始第 {st.loop_count + 1} 轮播放。")
 
@@ -1135,6 +1355,9 @@ def animate_success_steps(
         _hard_release_mesh(st.last_attached)
         st.last_attached = None
         st.finished = True
+        if not st.home_done:
+            _goto_home_sim(runner, base)
+            st.home_done = True
         print(
             f"[动画] 第 {st.loop_count + 1} 轮播放完毕。再按 SPACE 重新开始。"
         )
@@ -1146,11 +1369,11 @@ def animate_success_steps(
             _show_current_frame()
             return
 
-        # 首次按下 → 直接渲染第 0 帧；之后每按一次 frame_idx +1。
+        # 首次按下 → 直接渲染第 0 帧；之后每按一次 frame_idx += stride。
         if st.last_attached is None:
             _show_current_frame()
         else:
-            st.frame_idx += 1
+            st.frame_idx += stride
             _show_current_frame()
 
     base.accept("space", _on_space)
@@ -1173,6 +1396,7 @@ class LayoutSequenceVisualizer:
         contact_exclusion_map: Optional[Dict[str, List[str]]] = None,
         enable_middle_plate_regrasp: bool = True,
         handover_dir: str = DEFAULT_HANDOVER_DIR,
+        dual_arm_overlay: bool = False,
     ):
         self.asm = asm
         self.layout = layout
@@ -1181,6 +1405,10 @@ class LayoutSequenceVisualizer:
         self.base = base
         self.cdprim_type = cdprim_type
         self.grasp_map = grasp_map or {}
+        # 动画减压：默认不再给每一帧叠加"另一只手臂"的完整 mesh。
+        # 该叠加会让每帧三角面几何近乎翻倍(全程 100+ 帧)，是卡顿/黑屏崩溃的主因，
+        # 且正在运动的那只手臂本来就会画出来。需要双臂常驻可用 --dual-arm-overlay 打开。
+        self.dual_arm_overlay = bool(dual_arm_overlay)
         self.enable_middle_plate_regrasp = bool(enable_middle_plate_regrasp)
         self._middle_plate_hopg = os.path.join(
             handover_dir or DEFAULT_HANDOVER_DIR, "middle_plate_hopg.pickle"
@@ -1197,6 +1425,7 @@ class LayoutSequenceVisualizer:
                         self.contact_exclusion_map[k].append(item)
 
         self.part_order = _part_order_from_asm_or_layout(self.asm, self.layout)
+        self._last_assembly_pid = _last_assembly_part_id(self.part_order, self.layout)
 
         self.fixture_pos = np.asarray(self.layout.assembly_station_pos, dtype=float)
         self.fixture_rotmat = np.asarray(self.layout.assembly_station_rotmat, dtype=float)
@@ -1336,6 +1565,67 @@ class LayoutSequenceVisualizer:
         """兼容旧调用：默认返回落位校验障碍。"""
         return self._placement_obstacles(current_pid, placed)
 
+    def _maybe_debug_obstacles(self, current_pid: str, placed: set,
+                               transit_obs: List, placement_obs: List) -> None:
+        """打印当前 step 真正参与碰撞检测的障碍物。
+
+        注意：屏幕上彩色 staging 可视化模型可能只是动画显示残留；
+        真正参与规划碰撞的是 transit_obs / placement_obs 这两个列表。
+        """
+        if not bool(getattr(self, "debug_obstacles", False)):
+            return
+
+        dbg_part = str(getattr(self, "debug_part", "") or "").strip()
+        if dbg_part and dbg_part != current_pid:
+            return
+
+        printed = getattr(self, "_debug_obstacles_printed", set())
+        key = (current_pid, tuple(sorted(list(placed))))
+        if key in printed:
+            return
+        printed.add(key)
+        self._debug_obstacles_printed = printed
+
+        excluded = sorted(list(self._contact_exclusion_set(current_pid, placed)))
+
+        def _obs_name(obs) -> str:
+            pid = getattr(obs, "_sealp_part_id", None)
+            role = getattr(obs, "_sealp_role", None)
+            cdprim = getattr(obs, "_sealp_cdprim_type", None)
+            try:
+                pos = np.round(np.asarray(obs.pos, dtype=float), 4).tolist()
+            except Exception:
+                pos = "?"
+            try:
+                cls = obs.__class__.__name__
+            except Exception:
+                cls = type(obs).__name__
+            pid_s = str(pid) if pid is not None else "-"
+            role_s = str(role) if role is not None else "-"
+            cdprim_s = str(cdprim) if cdprim is not None else "-"
+            return (
+                f"pid={pid_s:14s} "
+                f"role={role_s:24s} "
+                f"cdprim={cdprim_s:8s} "
+                f"pos={pos} cls={cls}"
+            )
+
+        print("\n========== DEBUG OBSTACLES ==========")
+        print(f"current_pid = {current_pid}")
+        print(f"placed      = {sorted(list(placed))}")
+        print(f"excluded    = {excluded}")
+        print("说明: transit_obs 用于搬运/RRT；placement_obs 用于抓取/落位/common grasp。")
+        print("      屏幕上的彩色 staging 模型不一定参与碰撞，请以下面列表为准。")
+
+        print(f"\n[transit_obs] n={len(transit_obs)}")
+        for i, obs in enumerate(transit_obs):
+            print(f"  T{i:02d}: {_obs_name(obs)}")
+
+        print(f"\n[placement_obs] n={len(placement_obs)}")
+        for i, obs in enumerate(placement_obs):
+            print(f"  P{i:02d}: {_obs_name(obs)}")
+        print("=====================================\n")
+
     def _uses_handover_direct(self, pid: str) -> bool:
         return self.enable_middle_plate_regrasp and pid in HANDOVER_PART_IDS
 
@@ -1410,8 +1700,9 @@ class LayoutSequenceVisualizer:
                     _extract_obj_pose_per_frame(getattr(md, "mesh_list", []) or [])
                 )
 
-            # 动画显示修复：每一帧额外补上另一只手臂，避免“用到谁才出现谁”。
-            _add_other_arm_to_motion_segments(motion_list, self.robot)
+            # 动画显示：可选地给每一帧额外补上另一只手臂(默认关，减压)。
+            if self.dual_arm_overlay:
+                _add_other_arm_to_motion_segments(motion_list, self.robot)
             _apply_motion_end_states(motion_list)
             anim_md = _merge_motion_mesh_list(motion_list)
             print(
@@ -1461,6 +1752,141 @@ class LayoutSequenceVisualizer:
             pid, start_pose, goal_pose, gc, transit_obs
         )
 
+    def _home_return_obstacles(self, placed_after: set) -> List:
+        """最后一件释放后回 HOME 使用的完整障碍物集合。"""
+        obs = list(self.env_obstacles)
+        for placed_pid in placed_after:
+            gm = self.goal_models.get(placed_pid)
+            if gm is not None:
+                obs.append(gm)
+        for other_pid in self.part_order:
+            if other_pid in placed_after:
+                continue
+            sm = self.staging_models.get(other_pid)
+            if sm is not None:
+                obs.append(sm)
+        return obs
+
+    def _build_last_part_home_return(
+        self,
+        pid: str,
+        arm_tag: str,
+        arm,
+        transport_md,
+        placed: set,
+    ) -> Tuple[Optional[List], str]:
+        """删除最后一件 release 后的长撤离尾巴，并重新规划到 HOME。
+
+        TransportPrimitive 即使 place_depart_distance=0，在部分 WRS 版本里仍可能把
+        一段 end/depart 轨迹追加到 MotionData。这里不再信任那段尾巴，而是：
+        1. 根据夹爪重新张开的帧识别 release；
+        2. 仅保留极短的原撤离前缀，逐帧寻找一个不碰撞的 RRT 起点；
+        3. 从该起点用 RRT-Connect 规划到 HOME_JV。
+
+        只有 HOME 路径成功时，最后一件才算规划成功，避免缓存里再次留下“放完后
+        去了别处但没有回 home”的轨迹。
+        """
+        if transport_md is None:
+            return None, f"{pid}: final motion data missing"
+
+        jv_list = list(getattr(transport_md, "jv_list", None) or [])
+        ev_list = _extract_ev_list(transport_md)
+        if not jv_list:
+            return None, f"{pid}: final motion has no joint frames"
+
+        release_idx = _find_release_frame(transport_md)
+        if release_idx is None:
+            return None, f"{pid}: cannot detect gripper release frame"
+
+        release_ee = ev_list[release_idx] if release_idx < len(ev_list) else None
+        hold_end = min(
+            len(jv_list) - 1,
+            release_idx + max(1, int(FINAL_RELEASE_HOLD_FRAMES)) - 1,
+        )
+        search_end = min(
+            len(jv_list) - 1,
+            hold_end + max(0, int(FINAL_HOME_MAX_CLEARANCE_FRAMES)),
+        )
+
+        placed_after = set(placed)
+        placed_after.add(pid)
+        home_obstacles = self._home_return_obstacles(placed_after)
+
+        try:
+            from wrs.motion.probabilistic.rrt_connect import RRTConnect
+        except Exception as e:
+            return None, f"{pid}: cannot import RRTConnect for home return: {e!r}"
+
+        print(
+            f"  [FINAL/HOME] release_frame={release_idx}, "
+            f"hold_end={hold_end}, clearance_search={hold_end}..{search_end}, "
+            f"home_obs={len(home_obstacles)}"
+        )
+
+        original_jv = _get_arm_jv(arm)
+        original_ee = _get_arm_ee(arm)
+        last_reason = ""
+        for cut_idx in range(hold_end, search_end + 1):
+            start_jv = np.asarray(jv_list[cut_idx], dtype=float)
+            _goto_arm(arm, start_jv, release_ee)
+
+            try:
+                home_planner = RRTConnect(arm)
+                home_md = home_planner.plan(
+                    start_conf=start_jv,
+                    goal_conf=np.asarray(HOME_JV, dtype=float),
+                    obstacle_list=home_obstacles,
+                    ext_dist=RRT_EXT_DIST,
+                    smoothing_n_iter=RRT_SMOOTHING_N_ITER,
+                    max_time=FINAL_HOME_RRT_MAX_TIME,
+                    toggle_dbg=False,
+                )
+            except Exception as e:
+                last_reason = (
+                    f"cut_frame={cut_idx} home RRT exception "
+                    f"{type(e).__name__}: {e!r}"
+                )
+                print(f"    [NO/HOME] {last_reason}")
+                continue
+
+            if home_md is None or not (getattr(home_md, "jv_list", None) or []):
+                last_reason = f"cut_frame={cut_idx} home RRT returned no path"
+                print(f"    [NO/HOME] {last_reason}")
+                continue
+
+            # RRT 路径首帧与 transport 保留段末帧相同，删掉重复首帧。
+            if len(getattr(home_md, "jv_list", []) or []) > 1:
+                _slice_motion_data_inplace(home_md, start=1, stop=None)
+
+            # 现在才正式裁掉 TransportPrimitive 的长尾，只保留到可安全回 HOME 的帧。
+            _slice_motion_data_inplace(transport_md, start=0, stop=cut_idx + 1)
+
+            # HOME 段里零件已经释放，视觉上始终固定在最终装配位姿。
+            gp, gr = self.world_poses[pid]
+            for frame in getattr(home_md, "mesh_list", None) or []:
+                _attach_object_at_pose_to_frame(
+                    frame,
+                    self.asm,
+                    pid,
+                    pos=np.asarray(gp, dtype=float),
+                    rotmat=np.asarray(gr, dtype=float),
+                    cdprim_type=self.cdprim_type,
+                )
+
+            print(
+                f"    [OK/HOME] 保留原轨迹至 frame={cut_idx}，"
+                f"删除其后多余尾巴；RRT HOME frames="
+                f"{len(getattr(home_md, 'jv_list', []) or [])}"
+            )
+            return [transport_md, home_md], ""
+
+        # 所有 HOME 尝试失败时恢复进入本函数前的手臂状态，避免污染下一个候选。
+        _goto_arm(arm, original_jv, original_ee)
+        return None, (
+            f"{pid}: release 后无法在 {hold_end}..{search_end} 帧中找到可回 HOME 的起点; "
+            f"last={last_reason}"
+        )
+
     def _try_plan_step(self, pid: str, placed: set):
         if pid not in self.staging_models:
             return None, f"{pid}: staging model missing"
@@ -1483,13 +1909,17 @@ class LayoutSequenceVisualizer:
         arm_order = _arm_try_order(pid, preferred_arm)
 
         last_err = ""
+        if pid == self._last_assembly_pid:
+            print(f"[PLAN] pid={pid} 为最后一件: 放置后不做 place_depart, 结束即 home。")
         print(f"\n[PLAN] pid={pid}, preferred_arm={preferred_arm}, try_order={arm_order}")
 
         for arm_tag in arm_order:
             arm = self.robot.rgt_arm if arm_tag == "rgt" else self.robot.lft_arm
             transport = TransportPrimitive(arm)
 
-            for motion_tag, motion_kwargs in _motion_candidate_kwargs(pid, arm_tag):
+            for motion_tag, motion_kwargs in _motion_candidate_kwargs(
+                    pid, arm_tag,
+                    skip_place_depart=(pid == self._last_assembly_pid)):
                 # 每次尝试复制一个 moving object，避免失败污染 staging model
                 moving = make_collision_model(self.asm.model_path(pid), cdprim_type=self.cdprim_type)
                 moving.pos = obj_cm.pos.copy()
@@ -1500,6 +1930,17 @@ class LayoutSequenceVisualizer:
                 # 运输阶段使用完整动态障碍；落位/插接校验才使用接触豁免障碍。
                 transit_obs = self._transit_obstacles(pid, placed)
                 placement_obs = self._placement_obstacles(pid, placed)
+
+                debug_free_part = str(getattr(self, "debug_free_part", "") or "").strip()
+                if debug_free_part and (debug_free_part == pid or debug_free_part.lower() == "all"):
+                    print(
+                        f"    [DEBUG/FREE-PART] {pid}: 强制清空 transit_obs 和 placement_obs。"
+                        "这只用于诊断 No common grasp 是否由障碍物造成，不建议保存缓存。"
+                    )
+                    transit_obs = []
+                    placement_obs = []
+
+                self._maybe_debug_obstacles(pid, placed, transit_obs, placement_obs)
 
                 try:
                     try:
@@ -1540,45 +1981,78 @@ class LayoutSequenceVisualizer:
                     print(f"  [NO] {last_err}")
                     continue
 
+                transport_md = getattr(res, "mot_data", None)
+                if transport_md is None:
+                    last_err = f"{pid} {arm_tag} motion={motion_tag}: success=True but mot_data missing"
+                    print(f"  [NO] {last_err}")
+                    continue
+
+                motion_segments = [transport_md]
+                end_jv = np.asarray(getattr(res, "end_jnt_values", HOME_JV), dtype=float)
+
+                # 最后一件必须把 TransportPrimitive 的自动撤离尾巴替换为明确的 HOME 路径。
+                if pid == self._last_assembly_pid:
+                    motion_segments, home_err = self._build_last_part_home_return(
+                        pid=pid,
+                        arm_tag=arm_tag,
+                        arm=arm,
+                        transport_md=transport_md,
+                        placed=placed,
+                    )
+                    if motion_segments is None:
+                        last_err = f"{pid} {arm_tag} motion={motion_tag}: {home_err}"
+                        print(f"  [NO/FINAL-HOME] {last_err}")
+                        continue
+                    end_jv = np.asarray(HOME_JV, dtype=float)
+
+                # 必须在对侧手臂 overlay 改写 cm_list 前抽取每段物体真实位姿。
+                obj_pose_per_segment: List[List[Optional[Tuple[np.ndarray, np.ndarray]]]] = []
+                for md in motion_segments:
+                    obj_pose_per_segment.append(
+                        _extract_obj_pose_per_frame(getattr(md, "mesh_list", []) or [])
+                    )
+
+                # 动画显示：可选地给每一段补上另一只静止手臂。
+                if self.dual_arm_overlay:
+                    for md in motion_segments:
+                        _add_other_arm_to_motion_mesh_list(
+                            getattr(md, "mesh_list", []) or [],
+                            self.robot,
+                            active_arm_tag=arm_tag,
+                        )
+
+                # 多段（最后一件 transport + HOME）合并为一个连续动画。
+                anim_md = (
+                    motion_segments[0]
+                    if len(motion_segments) == 1
+                    else _merge_motion_mesh_list(motion_segments)
+                )
+
+                total_frames = sum(
+                    len(getattr(md, "mesh_list", []) or []) for md in motion_segments
+                )
                 print(
                     f"  [OK] pid={pid:14s} arm={arm_tag} motion={motion_tag} "
                     f"transit_obs={len(transit_obs)} placement_obs={len(placement_obs)} "
-                    f"frames={len(res.mot_data.mesh_list) if getattr(res, 'mot_data', None) else 0}"
+                    f"segments={len(motion_segments)} frames={total_frames} "
+                    f"end={'HOME' if pid == self._last_assembly_pid else 'place/depart'}"
                 )
 
-                # 先抢在 cm_list 被对侧手臂污染前，抽出逐帧 obj 真位姿，
-                # 后续 cache 重放靠它，不再做 staging→goal 直线插值。
-                obj_pose_seg: List[Optional[Tuple[np.ndarray, np.ndarray]]] = []
-                if getattr(res, "mot_data", None) is not None:
-                    obj_pose_seg = _extract_obj_pose_per_frame(
-                        getattr(res.mot_data, "mesh_list", []) or []
-                    )
-
-                # 动画显示修复：每一帧额外补上另一只手臂，避免“用到谁才出现谁”。
-                if getattr(res, "mot_data", None) is not None:
-                    _add_other_arm_to_motion_mesh_list(
-                        getattr(res.mot_data, "mesh_list", []) or [],
-                        self.robot,
-                        active_arm_tag=arm_tag,
-                    )
-
-                # 更新该臂末端关节状态
-                try:
-                    arm.goto_given_conf(res.end_jnt_values)
-                except Exception:
-                    try:
-                        arm.robot.goto_given_conf(res.end_jnt_values)
-                    except Exception:
-                        pass
+                # 更新该臂末端状态；最后一件现在明确结束在 HOME_JV。
+                _goto_arm(arm, end_jv)
 
                 sm = StepMotion(
                     step_id=-1,
                     part_id=pid,
                     arm_tag=arm_tag,
-                    motion_tag=motion_tag,
-                    mot_data=res.mot_data,
-                    motion_segments=[res.mot_data],
-                    obj_pose_per_segment=[obj_pose_seg],
+                    motion_tag=(
+                        f"{motion_tag}_then_home"
+                        if pid == self._last_assembly_pid
+                        else motion_tag
+                    ),
+                    mot_data=anim_md,
+                    motion_segments=motion_segments,
+                    obj_pose_per_segment=obj_pose_per_segment,
                 )
                 return sm, ""
 
@@ -1730,6 +2204,8 @@ class LayoutSequenceVisualizer:
                 failed_reason=last.reason,
             )
 
+        # 不在规划结束时提前“瞬移”到 HOME；最后一件的轨迹本身已经包含
+        # collision-free HOME 段，动画播放到末尾后再由状态机确认 HOME 姿态。
         return ExecutionSummary(
             success_steps=success_steps,
             failed_steps=[],
@@ -1775,6 +2251,13 @@ def _motion_cache_fingerprint(
         "handover_dir": os.path.abspath(handover_dir),
         "grasp_map": grasp_map or {},
         "contact_exclusion_map": contact_exclusion_map or {},
+        "pick_depart_dist": float(PICK_DEPART_DIST),
+        "place_depart_dist": float(PLACE_DEPART_DIST),
+        "skip_place_depart_last": True,
+        "trim_final_depart_tail": True,
+        "final_release_hold_frames": int(FINAL_RELEASE_HOLD_FRAMES),
+        "final_home_max_clearance_frames": int(FINAL_HOME_MAX_CLEARANCE_FRAMES),
+        "final_home_rrt_max_time": float(FINAL_HOME_RRT_MAX_TIME),
     }
     return hashlib.md5(
         json.dumps(meta, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1857,6 +2340,11 @@ def _serialize_step_motion(sm: StepMotion, runner=None) -> dict:
             segments.append(_serialize_motion_data(md, obj_pose_list=obj_pose_seg))
 
     carry_start = _infer_carry_start_for_step(sm, runner) if runner is not None else None
+    # 真机判定: 每段轨迹绑定 arm_side(lft/rgt)。若一步里出现 >=2 个不同手臂,
+    # 即真机需要"换手"(sender 夹住->receiver 夹住->sender 松开); 否则真机单臂即可。
+    arm_sides = [s.get("arm_side") for s in segments if s.get("arm_side") is not None]
+    distinct_arms = [a for i, a in enumerate(arm_sides) if a not in arm_sides[:i]]
+    is_handover = len(set(arm_sides)) > 1
     return {
         "step_id": int(sm.step_id),
         "part_id": sm.part_id,
@@ -1864,6 +2352,9 @@ def _serialize_step_motion(sm: StepMotion, runner=None) -> dict:
         "motion_tag": sm.motion_tag,
         "segments": segments,
         "carry_start": carry_start,
+        "arm_sides": arm_sides,
+        "handover": bool(is_handover),
+        "arm_sequence": distinct_arms,
     }
 
 
@@ -1901,11 +2392,33 @@ def save_motion_cache(
         "meta": extra_meta or {},
         "steps": [_serialize_step_motion(sm, runner=runner) for sm in summary.success_steps],
     }
+    # 真机执行说明: 标注每步用哪只手, 以及哪些步是"真换手"(真机需双臂交接)。
+    any_handover = False
+    for st in payload["steps"]:
+        if st.get("handover"):
+            any_handover = True
+    payload["meta"]["any_handover"] = bool(any_handover)
+
     with open(cache_path, "wb") as fh:
         pickle.dump(payload, fh)
 
     print(f"[CACHE/SAVE] 全部可规划步骤成功，已保存运动路径 -> {cache_path}")
     print(f"[CACHE/SAVE] steps={len(payload['steps'])}")
+    print("[CACHE/SAVE] ===== 真机执行说明(每段轨迹绑定 arm_side) =====")
+    for st in payload["steps"]:
+        seq = st.get("arm_sequence") or st.get("arm_sides") or []
+        if st.get("handover"):
+            print(f"  step={st['step_id']:>2} pid={st['part_id']:14s} "
+                  f"*** 真换手: 真机需双臂交接 {('->'.join(map(str, seq)))} "
+                  f"(receiver 先夹住再让 sender 松开, 当前缓存未编码握手同步, 真机慎用)")
+        else:
+            arm = (seq[0] if seq else "?")
+            print(f"  step={st['step_id']:>2} pid={st['part_id']:14s} "
+                  f"单臂={arm}  (真机单臂执行, 不换手)")
+    if any_handover:
+        print("[CACHE/SAVE] 注意: 存在真换手步骤, 真机直接重放需补充双臂握手同步逻辑。")
+    else:
+        print("[CACHE/SAVE] 全部为单臂步骤: 真机按 arm_side 逐段重放即可, 不会换手。")
     return cache_path
 
 
@@ -1940,27 +2453,47 @@ def _make_cached_dual_frame(
     rgt_jv: np.ndarray,
     lft_ee=None,
     rgt_ee=None,
+    active_sides=None,
 ):
-    """缓存回放时用左右臂关节角 + 夹爪宽度重建一帧双臂动画。
+    """缓存回放时用左右臂关节角 + 夹爪宽度重建一帧动画。
 
     早期版本只设 jnt_values，gripper 始终维持默认 jaw width，回放里看不到
     夹爪开合。这里把 ev (jaw width) 也灌进去，pick 之后会合上、place 之后会松开。
+
+    性能优化(默认开启): 单臂步骤只渲染正在动的那只手臂(``active_sides``)，
+    另一只手臂由常驻的半透明 ghost 机器人代为显示, 从而把每帧几何量减半,
+    显著缓解卡顿。需要每帧都画整台双臂时设 ``runner.anime_full_robot=True``
+    (CLI: ``--anime-full-robot``)。
     """
+    # 两臂关节角始终更新(保证 ghost/真换手渲染时位姿正确)。
+    _goto_arm(runner.robot.lft_arm, lft_jv, lft_ee)
+    _goto_arm(runner.robot.rgt_arm, rgt_jv, rgt_ee)
+
+    full_robot = bool(getattr(runner, "anime_full_robot", False))
+    sides = set(active_sides) if active_sides else set()
+    # 只有一只手臂参与这步 -> 只画那只手臂(轻量)。
+    if not full_robot and len(sides) == 1:
+        arm = runner.robot.rgt_arm if "rgt" in sides else runner.robot.lft_arm
+        mesh = _gen_arm_mesh(arm, alpha=0.85)
+        if mesh is not None:
+            return mesh
+        # 退回整机渲染。
+
     try:
-        _goto_arm(runner.robot.lft_arm, lft_jv, lft_ee)
-        _goto_arm(runner.robot.rgt_arm, rgt_jv, rgt_ee)
         return runner.robot.gen_meshmodel(alpha=0.85)
     except Exception:
-        try:
-            return runner.robot.gen_meshmodel(alpha=0.85)
-        except Exception:
-            return None
+        return None
 
 
 def _rebuild_mot_data_from_segments(
     step_payload: dict,
     runner,
 ) -> _AnimMotionData:
+    """从 pkl 中重建动画数据。
+
+    关键优化：不再一次性生成所有 mesh。这里只把缓存里的 jv/ev/obj_pose
+    展开成轻量 frame_states，真正的 mesh 在动画播放到该帧时才生成。
+    """
     part_id = step_payload["part_id"]
     segments = step_payload.get("segments") or []
 
@@ -1975,8 +2508,8 @@ def _rebuild_mot_data_from_segments(
     goal_pose = (np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))
 
     # 让不同 step 之间的缓存回放保持关节 + 夹爪宽度连续。
-    lft_jv = getattr(runner, "_cache_replay_lft_jv", np.asarray(HOME_JV, dtype=float))
-    rgt_jv = getattr(runner, "_cache_replay_rgt_jv", np.asarray(HOME_JV, dtype=float))
+    lft_jv = np.asarray(getattr(runner, "_cache_replay_lft_jv", np.asarray(HOME_JV, dtype=float)), dtype=float)
+    rgt_jv = np.asarray(getattr(runner, "_cache_replay_rgt_jv", np.asarray(HOME_JV, dtype=float)), dtype=float)
     lft_ee = getattr(runner, "_cache_replay_lft_ee", None)
     rgt_ee = getattr(runner, "_cache_replay_rgt_ee", None)
 
@@ -1985,90 +2518,79 @@ def _rebuild_mot_data_from_segments(
     if carry_start is None:
         carry_start = 0 if total_frames > 0 else None
 
-    mesh_list = []
+    # 这步实际用到的手臂集合: 单臂步骤 -> 每帧只渲染该臂(减半几何, 缓解卡顿)。
+    step_sides = {
+        seg.get("arm_side", "lft")
+        for seg in segments
+        if seg.get("jv_list")
+    }
+
+    frame_states: List[dict] = []
     global_i = 0
 
-    try:
-        runner.robot.backup_state()
-    except Exception:
-        pass
+    for seg in segments:
+        side = seg.get("arm_side", "lft")
+        jv_list = seg.get("jv_list") or []
+        ev_list = seg.get("ev_list") or []
+        obj_pose_list = seg.get("obj_pose_list") or []
 
-    try:
-        for seg in segments:
-            side = seg.get("arm_side", "lft")
-            jv_list = seg.get("jv_list") or []
-            ev_list = seg.get("ev_list") or []
-            obj_pose_list = seg.get("obj_pose_list") or []
+        for local_i, jv in enumerate(jv_list):
+            jv_arr = np.asarray(jv, dtype=float)
+            ev = _deserialize_ev(ev_list[local_i]) if local_i < len(ev_list) else None
+            if side == "rgt":
+                rgt_jv = jv_arr
+                if ev is not None:
+                    rgt_ee = ev
+            else:
+                lft_jv = jv_arr
+                if ev is not None:
+                    lft_ee = ev
 
-            for local_i, jv in enumerate(jv_list):
-                jv_arr = np.asarray(jv, dtype=float)
-                ev = _deserialize_ev(ev_list[local_i]) if local_i < len(ev_list) else None
-                if side == "rgt":
-                    rgt_jv = jv_arr
-                    if ev is not None:
-                        rgt_ee = ev
-                else:
-                    lft_jv = jv_arr
-                    if ev is not None:
-                        lft_ee = ev
+            # 物体可视化：优先用规划时记录的逐帧真实位姿；
+            # 实在缺失才退回 staging→goal 直线插值兜底。
+            obj_pose = None
+            if local_i < len(obj_pose_list):
+                obj_pose = _deserialize_obj_pose_entry(obj_pose_list[local_i])
 
-                frame = _make_cached_dual_frame(
-                    runner, lft_jv, rgt_jv, lft_ee=lft_ee, rgt_ee=rgt_ee,
+            if obj_pose is None and carry_start is not None and global_i >= int(carry_start):
+                denom = max(1, total_frames - int(carry_start) - 1)
+                t = (global_i - int(carry_start)) / float(denom)
+                sp, sr = start_pose
+                gp_, gr_ = goal_pose
+                obj_pose = (
+                    (1.0 - t) * np.asarray(sp, dtype=float) + t * np.asarray(gp_, dtype=float),
+                    _interp_rotmat(sr, gr_, t),
                 )
 
-                # 物体可视化：优先用规划时记录的逐帧真实位姿（让物体真正跟着夹爪走）；
-                # 实在缺失才退回 staging→goal 直线插值兜底。
-                stored_pose = None
-                if local_i < len(obj_pose_list):
-                    stored_pose = _deserialize_obj_pose_entry(obj_pose_list[local_i])
-
-                if frame is not None and stored_pose is not None:
-                    obj_pos, obj_rot = stored_pose
-                    _attach_object_at_pose_to_frame(
-                        frame,
-                        runner.asm,
-                        part_id,
-                        pos=obj_pos,
-                        rotmat=obj_rot,
-                        cdprim_type=runner.cdprim_type,
-                    )
-                elif (
-                    frame is not None
-                    and carry_start is not None
-                    and global_i >= int(carry_start)
-                ):
-                    # 兼容旧 cache（没有 obj_pose_list）。
-                    denom = max(1, total_frames - int(carry_start) - 1)
-                    t = (global_i - int(carry_start)) / float(denom)
-                    _attach_interpolated_object_to_frame(
-                        frame,
-                        runner.asm,
-                        part_id,
-                        start_pose=start_pose,
-                        goal_pose=goal_pose,
-                        t=t,
-                        cdprim_type=runner.cdprim_type,
-                    )
-
-                mesh_list.append(frame)
-                global_i += 1
-    finally:
-        try:
-            runner.robot.restore_state()
-        except Exception:
-            pass
+            frame_states.append({
+                "lft_jv": np.asarray(lft_jv, dtype=float).copy(),
+                "rgt_jv": np.asarray(rgt_jv, dtype=float).copy(),
+                "lft_ee": copy.deepcopy(lft_ee),
+                "rgt_ee": copy.deepcopy(rgt_ee),
+                "active_sides": set(step_sides),
+                "obj_pose": obj_pose,
+            })
+            global_i += 1
 
     runner._cache_replay_lft_jv = np.asarray(lft_jv, dtype=float)
     runner._cache_replay_rgt_jv = np.asarray(rgt_jv, dtype=float)
     runner._cache_replay_lft_ee = lft_ee
     runner._cache_replay_rgt_ee = rgt_ee
 
+    mesh_list = _LazyCachedMeshList(
+        runner=runner,
+        part_id=part_id,
+        frame_states=frame_states,
+        max_keep=int(getattr(runner, "lazy_cache_keep_frames", 1)),
+    )
     md = _AnimMotionData(mesh_list=mesh_list)
     md.cached_carry_start = carry_start
+    md.lazy_cache_playback = True
     return md
 
 
 def rebuild_summary_from_cache(payload: dict, runner) -> ExecutionSummary:
+    print("[CACHE/LAZY] 使用惰性回放：只保存关节帧，按 SPACE 到达时再生成 mesh。")
     runner._cache_replay_lft_jv = np.asarray(HOME_JV, dtype=float)
     runner._cache_replay_rgt_jv = np.asarray(HOME_JV, dtype=float)
     runner._cache_replay_lft_ee = None
@@ -2132,7 +2654,7 @@ def _parse_args():
     parser.add_argument(
         "--cdprim-type",
         default=DEFAULT_CDPRIM_TYPE,
-        help="碰撞模型类型，默认 triangles(mesh)。想加速可以填 box / convex_hull。",
+        help="碰撞模型类型，默认 box(AABB 包围盒)。更精细可填 triangles / convex_hull。",
     )
     parser.add_argument(
         "--contact-exclusion-json",
@@ -2145,12 +2667,17 @@ def _parse_args():
     parser.add_argument(
         "--no-middle-plate-regrasp",
         action="store_true",
-        help="middle_plate 改回单臂 pick-place（默认直接换手）",
+        help="[已默认] middle_plate 用单臂 pick-place。换手现已默认取消, 本参数保留向后兼容。",
+    )
+    parser.add_argument(
+        "--middle-plate-handover",
+        action="store_true",
+        help="恢复 middle_plate 双臂换手(默认取消; 之前换手其实退化成单臂且较慢)。",
     )
     parser.add_argument(
         "--handover-dir",
         default=DEFAULT_HANDOVER_DIR,
-        help="middle_plate 换手 hopg 目录",
+        help="middle_plate 换手 hopg 目录(仅 --middle-plate-handover 时使用)",
     )
     parser.add_argument(
         "--no-auto-play",
@@ -2178,11 +2705,57 @@ def _parse_args():
         action="store_true",
         help="即使全部成功也不写入缓存",
     )
+    parser.add_argument(
+        "--dual-arm-overlay",
+        action="store_true",
+        help="给每一帧叠加另一只静止手臂的完整 mesh(默认关)。"
+             "开启会让每帧几何近乎翻倍，容易卡顿/黑屏崩溃；"
+             "正在运动的那只手臂本来就会画出，通常无需开启。",
+    )
+    parser.add_argument(
+        "--anime-stride",
+        type=int,
+        default=1,
+        help="动画每按一次 SPACE 推进的帧数(>1 可显著减少重型 mesh 上传次数、缓解卡顿)。",
+    )
+    parser.add_argument(
+        "--lazy-cache-keep",
+        type=int,
+        default=1,
+        help="缓存回放时最多保留最近多少帧 mesh。默认 1，显著降低显存/内存占用；调大可减少重复生成。",
+    )
+    parser.add_argument(
+        "--anime-full-robot",
+        action="store_true",
+        help="缓存回放时每帧都渲染整台双臂(默认关)。默认单臂步骤只画运动臂以缓解卡顿，"
+             "另一只手臂由常驻 ghost 机器人显示; 开启此项恢复整机渲染(更重、更卡)。",
+    )
+    parser.add_argument(
+        "--debug-obstacles",
+        action="store_true",
+        help="调试用：打印当前 step 真正传入规划器的 transit_obs / placement_obs 障碍物列表。",
+    )
+    parser.add_argument(
+        "--debug-part",
+        default="",
+        help="只打印指定零件的障碍物，例如 top_cross；为空则所有零件都打印。",
+    )
+    parser.add_argument(
+        "--debug-free-part",
+        default="",
+        help=(
+            "诊断用：对指定零件强制清空 transit_obs 和 placement_obs，"
+            "用于判断 No common grasp 是否由障碍物导致。只建议配合 --no-save-cache 使用。"
+        ),
+    )
     return parser.parse_args()
 
 
 def main():
     args = _parse_args()
+
+    # 换手默认取消(单臂)。仅当显式 --middle-plate-handover 且未 --no-middle-plate-regrasp 时启用。
+    mp_handover = bool(getattr(args, "middle_plate_handover", False)) and not args.no_middle_plate_regrasp
 
     _patch_rrt()
 
@@ -2202,10 +2775,14 @@ def main():
     print(f"layout     = {layout_path}")
     print(f"config     = {config_path}")
     print(f"grasp_dir  = {grasp_dir}")
-    print(f"cdprim     = {args.cdprim_type}  # 默认 mesh/triangles")
-    print(f"middle_plate_handover = {not args.no_middle_plate_regrasp}")
-    if not args.no_middle_plate_regrasp:
+    print(f"cdprim     = {args.cdprim_type}  # 默认 box(AABB)")
+    print(f"middle_plate_handover = {mp_handover}  # 默认 False(单臂); 用 --middle-plate-handover 恢复")
+    if mp_handover:
         print(f"handover_dir = {os.path.abspath(args.handover_dir)}")
+    print(f"dual_arm_overlay = {args.dual_arm_overlay}  # 默认 False(减压); --replan 时才会写入新缓存")
+    print(f"anime_stride = {max(1, int(args.anime_stride))}  # 每按一次 SPACE 推进的帧数")
+    print(f"anime_full_robot = {bool(getattr(args, 'anime_full_robot', False))}  "
+          f"# 默认 False(单臂步骤只画运动臂, 缓存回放更顺); True 恢复整机渲染")
     print("=" * 78)
 
     asm = AssemblyDef.load(asmdef_path)
@@ -2234,9 +2811,24 @@ def main():
         cdprim_type=args.cdprim_type,
         grasp_map=_load_json_map(args.grasp_map_json),
         contact_exclusion_map=_load_json_map(args.contact_exclusion_json),
-        enable_middle_plate_regrasp=not args.no_middle_plate_regrasp,
+        enable_middle_plate_regrasp=mp_handover,
         handover_dir=os.path.abspath(args.handover_dir),
+        dual_arm_overlay=args.dual_arm_overlay,
     )
+    runner.debug_obstacles = bool(getattr(args, "debug_obstacles", False))
+    runner.debug_part = str(getattr(args, "debug_part", "") or "").strip()
+    runner.debug_free_part = str(getattr(args, "debug_free_part", "") or "").strip()
+    runner._debug_obstacles_printed = set()
+    if runner.debug_obstacles:
+        print(f"debug_obstacles = True  debug_part = {runner.debug_part or '<all>'}")
+    if runner.debug_free_part:
+        print(f"debug_free_part = {runner.debug_free_part}  # 诊断模式：该零件规划时强制清空所有障碍物")
+
+    # 缓存回放渲染策略: 默认单臂步骤只画运动臂(减压); --anime-full-robot 恢复整机。
+    runner.anime_full_robot = bool(getattr(args, "anime_full_robot", False))
+    runner.lazy_cache_keep_frames = max(0, int(getattr(args, "lazy_cache_keep", 1)))
+    print(f"lazy_cache_playback = True  # pkl 回放按需生成 mesh，避免一次性构建全部帧")
+    print(f"lazy_cache_keep     = {runner.lazy_cache_keep_frames}  # 最近保留帧数")
 
     grasp_map = _load_json_map(args.grasp_map_json)
     contact_exclusion_map = _load_json_map(args.contact_exclusion_json)
@@ -2246,7 +2838,7 @@ def main():
         layout_path=layout_path,
         grasp_dir=grasp_dir,
         cdprim_type=args.cdprim_type,
-        enable_middle_plate_regrasp=not args.no_middle_plate_regrasp,
+        enable_middle_plate_regrasp=mp_handover,
         handover_dir=os.path.abspath(args.handover_dir),
         grasp_map=grasp_map,
         contact_exclusion_map=contact_exclusion_map,
@@ -2279,7 +2871,7 @@ def main():
                 runner=runner,
                 extra_meta={
                     "cdprim_type": args.cdprim_type,
-                    "middle_plate_handover": not args.no_middle_plate_regrasp,
+                    "middle_plate_handover": mp_handover,
                 },
             )
         elif summary.failed_steps:
@@ -2318,6 +2910,7 @@ def main():
         base,
         summary.success_steps,
         runner=runner,
+        frame_stride=args.anime_stride,
     )
 
     base.run()
