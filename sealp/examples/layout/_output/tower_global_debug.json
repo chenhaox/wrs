@@ -1,34 +1,34 @@
 {
-  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_optimal_initial.layout",
-  "score": 0.4818822719877366,
+  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_global.layout",
+  "score": 0.6258827392485982,
   "xy": {
+    "base_plate": [
+      0.23000000000000004,
+      -0.35000000000000003
+    ],
     "post_br": [
-      0.45799166642129424,
-      -0.6724463752734967
+      0.1702698547093302,
+      -0.24495210337100973
     ],
     "post_fr": [
-      0.45799166642129424,
-      -0.48230617515880303
+      0.17283728619415822,
+      -0.7518313779045256
     ],
     "post_bl": [
-      0.36277829893618985,
-      -0.06114516513787102
+      0.30173178988701455,
+      -0.071134019840049
     ],
     "post_fl": [
-      0.322307634746037,
-      0.11939390676718176
+      0.24932471050229202,
+      -0.7427465897537311
     ],
     "middle_plate": [
-      0.16144181450375877,
-      0.17919999971985817
+      0.34147978479489105,
+      -0.5940724145117519
     ],
     "top_cross": [
-      0.2017393254506913,
-      -0.2646961432543332
-    ],
-    "base_plate": [
-      0.3725000035762787,
-      -0.35000000000000003
+      0.19210874422663832,
+      -0.15661955716608977
     ]
   },
   "z_offset": {
@@ -37,7 +37,7 @@
     "post_fr": 0.003,
     "post_bl": 0.003,
     "post_fl": 0.003,
-    "middle_plate": 0.06299999865889551,
+    "middle_plate": 0.08550000327825547,
     "top_cross": 0.003
   },
   "pose_tag": {
@@ -46,7 +46,7 @@
     "post_fr": "identity",
     "post_bl": "identity",
     "post_fl": "identity",
-    "middle_plate": "auto_upright_lifted",
+    "middle_plate": "fs_upright_lifted",
     "top_cross": "identity"
   },
   "rot_name": {
@@ -55,16 +55,16 @@
     "post_fr": "identity",
     "post_bl": "identity",
     "post_fl": "identity",
-    "middle_plate": "rot90_04",
+    "middle_plate": "fs_03",
     "top_cross": "identity"
   },
-  "assembly_region_id": "r1_c2",
+  "assembly_region_id": "r1_c1",
   "assembly_region_rc": [
     1,
-    2
+    1
   ],
   "assembly_station_pos": [
-    0.3725000035762787,
+    0.23000000000000004,
     -0.35000000000000003,
     0.0
   ],
@@ -87,28 +87,28 @@
   },
   "grasp_counts": {
     "base_plate": 20,
-    "post_br": 13,
-    "post_fr": 43,
+    "post_br": 73,
+    "post_fr": 63,
     "post_bl": 35,
-    "post_fl": 7,
-    "middle_plate": 78,
-    "top_cross": 27
+    "post_fl": 50,
+    "middle_plate": 66,
+    "top_cross": 51
   },
   "arm_choice": {
     "base_plate": "preassembled",
     "post_br": "rgt",
     "post_fr": "rgt",
     "post_bl": "lft",
-    "post_fl": "lft",
-    "middle_plate": "lft",
+    "post_fl": "rgt",
+    "middle_plate": "rgt",
     "top_cross": "lft"
   },
   "score_components": {
-    "grasp": 0.5187268298890872,
-    "manip": 0.28326624004729073,
-    "dist": 0.587883740397904,
-    "rot": 0.7414116311178057,
-    "spatial_y_distribution": 0.825
+    "grasp": 0.8636550921366688,
+    "manip": 0.29730164317457175,
+    "dist": 0.6503340149152799,
+    "rot": 0.7209434519836979,
+    "spatial_y_distribution": 0.9969612715722077
   },
   "spatial_constraints": {
     "min_staging_mesh_clearance": 0.01,
@@ -233,18 +233,18 @@
     ],
     "middle_plate": [
       [
-        1.0000000000000002,
         0.0,
-        0.0
+        0.7071067811865475,
+        0.7071067811865475
       ],
       [
         0.0,
-        0.0,
-        -1.0000000000000002
+        0.7071067811865475,
+        -0.7071067811865475
       ],
       [
+        -1.0,
         0.0,
-        1.0000000000000002,
         0.0
       ]
     ],

@@ -1,8 +1,8 @@
 # SEALP Workspace Layout v1.0
-# tower_optimal_initial
+# tower_nsga2_fast_test
 
 format_version: '1.0'
-name: tower_optimal_initial
+name: tower_nsga2_fast_test
 robot_base:
   pos:
   - !!float '0'
@@ -20,7 +20,7 @@ robot_base:
     - !!float '1'
 assembly_station:
   pos:
-  - 0.3725
+  - 0.23
   - -0.35
   - !!float '0'
   rotmat:
@@ -36,7 +36,7 @@ assembly_station:
 staging:
   base_plate:
     pos:
-    - 0.3725
+    - 0.23
     - -0.35
     - !!float '0'
     rotmat:
@@ -51,38 +51,38 @@ staging:
       - !!float '1'
   post_br:
     pos:
-    - 0.457992
-    - -0.672446
+    - 0.330995
+    - -0.0726173
     - 0.003
     rotmat:
     - - !!float '1'
       - !!float '0'
       - !!float '0'
     - - !!float '0'
-      - !!float '1'
+      - !!float '-1'
       - !!float '0'
     - - !!float '0'
       - !!float '0'
       - !!float '1'
   post_fr:
     pos:
-    - 0.457992
-    - -0.482306
-    - 0.003
+    - 0.143473
+    - -0.621475
+    - 0.0150083
     rotmat:
-    - - !!float '1'
+    - - !!float '-1'
       - !!float '0'
+      - -1.22465e-16
+    - - 1.22465e-16
       - !!float '0'
+      - !!float '-1'
     - - !!float '0'
-      - !!float '1'
+      - !!float '-1'
       - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '1'
   post_bl:
     pos:
-    - 0.362778
-    - -0.0611452
+    - 0.4076
+    - 0.143167
     - 0.003
     rotmat:
     - - !!float '1'
@@ -96,38 +96,38 @@ staging:
       - !!float '1'
   post_fl:
     pos:
-    - 0.322308
-    - 0.119394
-    - 0.003
+    - 0.165157
+    - -0.576229
+    - 0.0150083
     rotmat:
     - - !!float '1'
       - !!float '0'
       - !!float '0'
     - - !!float '0'
-      - !!float '1'
       - !!float '0'
+      - !!float '1'
     - - !!float '0'
+      - !!float '-1'
       - !!float '0'
-      - !!float '1'
   middle_plate:
     pos:
-    - 0.161442
-    - 0.1792
+    - 0.277395
+    - -0.169091
     - 0.063
     rotmat:
-    - - !!float '1'
+    - - 0.707107
       - !!float '0'
+      - 0.707107
+    - - 0.707107
       - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '-1'
+      - -0.707107
     - - !!float '0'
       - !!float '1'
       - !!float '0'
   top_cross:
     pos:
-    - 0.201739
-    - -0.264696
+    - 0.23418
+    - -0.737528
     - 0.003
     rotmat:
     - - !!float '1'
@@ -143,13 +143,13 @@ metadata:
   search_method: weighted_random_on_work_table
   l3_pass: false
   l3_fail_reason: ''
-  score: 0.481882
+  score: 0.398519
   score_components:
-    grasp: 0.518727
-    manip: 0.283266
-    dist: 0.587884
-    rot: 0.741412
-    spatial_y_distribution: 0.825
+    grasp: 0.559902
+    manip: 0.189053
+    dist: 0.625646
+    rot: 0.217841
+    spatial_y_distribution: !!float '1'
   spatial_constraints:
     min_staging_mesh_clearance: 0.01
     enforce_order_x_constraint: false
@@ -190,12 +190,12 @@ metadata:
   - post_fl
   - middle_plate
   - top_cross
-  assembly_region_id: r1_c2
+  assembly_region_id: r1_c1
   assembly_region_rc:
   - 1
-  - 2
+  - 1
   assembly_station_pos:
-  - 0.3725
+  - 0.23
   - -0.35
   - !!float '0'
   preassemble_first_part: true
@@ -216,12 +216,12 @@ metadata:
     - -0.62
   grasp_counts:
     base_plate: 20
-    post_br: 13
-    post_fr: 43
-    post_bl: 35
-    post_fl: 7
-    middle_plate: 78
-    top_cross: 27
+    post_br: 11
+    post_fr: 20
+    post_bl: 23
+    post_fl: 16
+    middle_plate: 25
+    top_cross: 10
   topdown_counts_identity:
     post_br: 572
     post_fr: 572
@@ -236,55 +236,55 @@ metadata:
     post_bl: lft
     post_fl: lft
     middle_plate: lft
-    top_cross: lft
+    top_cross: rgt
   pose_tag:
     base_plate: preassembled_at_assembly_region
     post_br: identity
-    post_fr: identity
+    post_fr: rot90_lifted
     post_bl: identity
-    post_fl: identity
-    middle_plate: auto_upright_lifted
-    top_cross: identity
+    post_fl: rot90_lifted
+    middle_plate: fs_upright_lifted
+    top_cross: rot90_lifted
   rot_name:
     base_plate: goal_pose
     post_br: identity
-    post_fr: identity
+    post_fr: rot90_11
     post_bl: identity
-    post_fl: identity
-    middle_plate: rot90_04
-    top_cross: identity
+    post_fl: rot90_08
+    middle_plate: fs_00
+    top_cross: rot90_04
   z_offsets:
     base_plate: !!float '0'
     post_br: 0.003
-    post_fr: 0.003
+    post_fr: 0.0150083
     post_bl: 0.003
-    post_fl: 0.003
+    post_fl: 0.0150083
     middle_plate: 0.063
-    top_cross: 0.003
+    top_cross: 0.012
   per_part_dist:
     base_plate: !!float '0'
-    post_br: 0.371945
-    post_fr: 0.086822
-    post_bl: 0.246279
-    post_fl: 0.518402
-    middle_plate: 0.575916
-    top_cross: 0.245857
+    post_br: 0.231827
+    post_fr: 0.268696
+    post_bl: 0.505806
+    post_fl: 0.177505
+    middle_plate: 0.205074
+    top_cross: 0.416627
   per_part_manip:
     base_plate: !!float '0'
-    post_br: 0.0166283
-    post_fr: 0.0150996
-    post_bl: 0.0159333
-    post_fl: 0.0140907
-    middle_plate: 0.00818881
-    top_cross: !!float '0'
+    post_br: !!float '0'
+    post_fr: 0.00820088
+    post_bl: 0.0164896
+    post_fl: !!float '0'
+    middle_plate: 0.014981
+    top_cross: 0.00433469
   per_part_rot_angle:
     base_plate: !!float '0'
     post_br: !!float '0'
-    post_fr: !!float '0'
+    post_fr: 3.14159
     post_bl: !!float '0'
-    post_fl: !!float '0'
-    middle_plate: 1.5708
-    top_cross: !!float '0'
+    post_fl: 1.5708
+    middle_plate: 1.71777
+    top_cross: 1.5708
   table_top_z: !!float '0'
   table_x_range:
   - -0.01

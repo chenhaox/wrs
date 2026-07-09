@@ -1,0 +1,1109 @@
+[RRT patch] ext_dist=0.3, smoothing=150, max_time=10.0s
+==============================================================================
+Execute Layout Sequence Visualizer [v5 middle_plate handover]
+asmdef     = D:\Project\wrs-sealp\sealp\assembly_sequence\_demo_output\topdown_tower.asmdef
+layout     = D:\Project\wrs-sealp\sealp\examples\layout\_output\tower_optimal_initial.layout
+config     = D:\Project\wrs-sealp\sealp\config\sample_config.yaml
+grasp_dir  = D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp
+cdprim     = box  # 默认 mesh/triangles
+middle_plate_handover = False  # 默认 False(单臂); 用 --middle-plate-handover 恢复
+dual_arm_overlay = False  # 默认 False(减压); --replan 时才会写入新缓存
+anime_stride = 1  # 每按一次 SPACE 推进的帧数
+==============================================================================
+Loaded asm    : TopDownTower, n_parts=7, n_steps=7
+Loaded layout : tower_optimal_initial
+assembly pos  : [0.345, -0.35, 0.0]
+metadata keys : ['search_method', 'l3_pass', 'l3_fail_reason', 'score', 'score_components', 'spatial_constraints', 'weights', 'part_order', 'assembly_region_id', 'assembly_region_rc', 'assembly_station_pos', 'preassemble_first_part', 'filter_assembly_near_arms', 'assembly_region_rule', 'assembly_arm_x_clearance', 'assembly_arm_y_clearance', 'filter_staging_near_arms', 'staging_arm_x_clearance', 'staging_arm_y_clearance', 'arm_base_xy_map', 'grasp_counts', 'topdown_counts_identity', 'arm_choice', 'pose_tag', 'rot_name', 'z_offsets', 'per_part_dist', 'per_part_manip', 'per_part_rot_angle', 'table_top_z', 'table_x_range', 'table_y_range', 'rotation_lift_rule', 'check_robot_home_collision', 'strict_initial_robot_collision', 'robot_home_collision_rule', 'robot_home_clearance_rule', 'l2_pick_quick_motion_rule']
+[环境] 已加载 1 个静态障碍物。
+
+========== Grasp 文件加载 ==========
+base_plate      : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_base_plate_grasps.pickle  n=278
+post_br         : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_post_grasps.pickle  n=876
+post_fr         : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_post_grasps.pickle  n=876
+post_bl         : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_post_grasps.pickle  n=876
+post_fl         : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_post_grasps.pickle  n=876
+middle_plate    : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_middle_plate_grasps.pickle  n=520
+top_cross       : D:\Project\wrs-sealp\sealp\examples\grasp\tower_grasp\tower_top_cross_grasps.pickle  n=531
+
+========== 构建 staging / goal 动态障碍模型 ==========
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+box
+triangles
+staging_models = ['base_plate', 'post_br', 'post_fr', 'post_bl', 'post_fl', 'middle_plate', 'top_cross']
+goal_models    = ['base_plate', 'post_br', 'post_fr', 'post_bl', 'post_fl', 'middle_plate', 'top_cross']
+motion_cache = D:\Project\wrs-sealp\sealp\examples\motion\_output\tower_optimal_initial_motions.pkl
+cache_fp     = 2a1f0346aa9c3f7790f5945502dc7790
+========== Layout Sequence Execute All Possible Steps ==========
+assembly_station = [0.345, -0.35, 0.0]
+part_order       = ['base_plate', 'post_br', 'post_fr', 'post_bl', 'post_fl', 'middle_plate', 'top_cross']
+cdprim_type      = box
+continue_on_fail = True
+
+========== 目标 ghost ==========
+box
+triangles
+ghost base_plate    : pos=[0.345, -0.35, 0.0]
+box
+triangles
+ghost post_br       : pos=[0.4087, -0.3012, 0.0122]
+box
+triangles
+ghost post_fr       : pos=[0.4087, -0.3988, 0.0122]
+box
+triangles
+ghost post_bl       : pos=[0.2812, -0.3012, 0.0122]
+box
+triangles
+ghost post_fl       : pos=[0.2812, -0.3988, 0.0122]
+box
+triangles
+ghost middle_plate  : pos=[0.345, -0.35, 0.1472]
+box
+triangles
+ghost top_cross     : pos=[0.345, -0.35, 0.158]
+
+========== 初始 staging 彩色显示 ==========
+box
+triangles
+base_plate    : pos=[0.345, -0.35, 0.0]
+box
+triangles
+post_br       : pos=[0.0766, -0.2786, 0.003]
+box
+triangles
+post_fr       : pos=[0.1296, -0.44, 0.003]
+box
+triangles
+post_bl       : pos=[0.3502, -0.2161, 0.003]
+box
+triangles
+post_fl       : pos=[0.4328, 0.178, 0.003]
+box
+triangles
+middle_plate  : pos=[0.5751, -0.2516, 0.0855]
+box
+triangles
+top_cross     : pos=[0.0705, -0.3627, 0.003]
+[SKIP/PREASSEMBLED] step=0 pid=base_plate: layout 中标记为已装配，直接加入 goal 动态障碍，并以实心模型显示。
+
+[PLAN] pid=post_br, preferred_arm=rgt, try_order=['rgt', 'lft']
+box
+triangles
+    [接触豁免/落位] 当前 'post_br' 规划时临时排除已装件: ['base_plate']
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+  [OK] pid=post_br        arm=rgt motion=z transit_obs=7 placement_obs=6 frames=35
+[SUCCESS] step=1 pid=post_br 规划成功，加入已装配集合。
+
+[PLAN] pid=post_fr, preferred_arm=rgt, try_order=['rgt', 'lft']
+box
+triangles
+    [接触豁免/落位] 当前 'post_fr' 规划时临时排除已装件: ['base_plate']
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+  [OK] pid=post_fr        arm=rgt motion=z transit_obs=7 placement_obs=6 frames=33
+[SUCCESS] step=2 pid=post_fr 规划成功，加入已装配集合。
+
+[PLAN] pid=post_bl, preferred_arm=lft, try_order=['lft', 'rgt']
+box
+triangles
+    [接触豁免/落位] 当前 'post_bl' 规划时临时排除已装件: ['base_plate']
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+PPPlanner: Error encountered when generating pick depart motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+  [OK] pid=post_bl        arm=lft motion=z transit_obs=7 placement_obs=6 frames=26
+[SUCCESS] step=3 pid=post_bl 规划成功，加入已装配集合。
+
+[PLAN] pid=post_fl, preferred_arm=lft, try_order=['lft', 'rgt']
+box
+triangles
+    [接触豁免/落位] 当前 'post_fl' 规划时临时排除已装件: ['base_plate']
+The given joint angles are out of joint limits.
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+The given joint angles are out of joint limits.
+  [OK] pid=post_fl        arm=lft motion=z transit_obs=7 placement_obs=6 frames=36
+[SUCCESS] step=4 pid=post_fl 规划成功，加入已装配集合。
+
+[PLAN] pid=middle_plate, preferred_arm=rgt, try_order=['rgt', 'lft']
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+None of the reasoned common grasps are valid.
+  [NO] middle_plate rgt motion=z: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+None of the reasoned common grasps are valid.
+  [NO] middle_plate rgt motion=y_minus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+None of the reasoned common grasps are valid.
+  [NO] middle_plate rgt motion=x_plus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+None of the reasoned common grasps are valid.
+  [NO] middle_plate rgt motion=x_minus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+RRT: The start robot configuration is in collision!
+ADPlanner: Cannot plan the rrt motion from start_jnt_values to the beginning of approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+Intermediated pose collided in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+None of the reasoned common grasps are valid.
+  [NO] middle_plate rgt motion=y_plus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+No common grasp id at the given goal poses!
+  [NO] middle_plate lft motion=z: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+No common grasp id at the given goal poses!
+  [NO] middle_plate lft motion=y_plus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+No common grasp id at the given goal poses!
+  [NO] middle_plate lft motion=x_minus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+No common grasp id at the given goal poses!
+  [NO] middle_plate lft motion=x_plus: PickPlacePlanner failed: no valid grasp/path found.
+box
+triangles
+    [接触豁免/落位] 当前 'middle_plate' 规划时临时排除已装件: ['base_plate', 'post_bl', 'post_br', 'post_fl', 'post_fr']
+No common grasp id at the given goal poses!
+  [NO] middle_plate lft motion=y_minus: PickPlacePlanner failed: no valid grasp/path found.
+======================================================================
+[FAIL/CONTINUE] step=5 pid=middle_plate 规划失败，但继续尝试后续零件。
+reason: middle_plate lft motion=y_minus: PickPlacePlanner failed: no valid grasp/path found.
+说明：该零件仍保留在 staging 位置，不加入 placed；后续规划会继续把它当作未装零件障碍。
+======================================================================
+
+[PLAN] pid=top_cross, preferred_arm=lft, try_order=['lft', 'rgt']
+box
+triangles
+    [接触豁免/落位] 当前 'top_cross' 规划时临时排除已装件: ['base_plate']
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+PPPlanner: Error encountered when generating pick approach motion!
+Cannot generate the pick and moveto motion!
+IK not solvable in gen_linear_motion!
+ADPlanner: Cannot generate linear approach!
+ADPlanner: Cannot generate the linear approach section of gen_approach!
+ADPlanner: Cannot plan the approach section of approach-depart motion!
+Error encountered when generating motion to the 0th goal!
+Cannot generate the pick and moveto motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+PPPlanner: Error encountered when generating pick depart motion!
+Cannot generate the pick and moveto motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+PPPlanner: Error encountered when generating pick depart motion!
+Cannot generate the pick and moveto motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+The given joint angles are out of joint limits.
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+Gen_rel_linear_motion: IK not solvable...
+ADPlanner: Cannot generate linear approach with given jnt values!
+ADPlanner: Cannot plan the linear depart section of depart with given conf!
+Cannot generate the release motion!
+The given joint angles are out of joint limits.
+  [OK] pid=top_cross      arm=lft motion=z transit_obs=7 placement_obs=6 frames=31
+[SUCCESS] step=6 pid=top_cross 规划成功，加入已装配集合。
+======================================================================
+[DONE] 已遍历所有步骤。
+成功步骤数: 5
+失败步骤数: 1
+======================================================================
+[CACHE/SAVE] 存在失败步骤，不写入缓存。
+
+========== 执行总结 ==========
+成功步骤数: 5
+  [OK]   step= 1 pid=post_br        arm=rgt motion=z via=single-arm
+  [OK]   step= 2 pid=post_fr        arm=rgt motion=z via=single-arm
+  [OK]   step= 3 pid=post_bl        arm=lft motion=z via=single-arm
+  [OK]   step= 4 pid=post_fl        arm=lft motion=z via=single-arm
+  [OK]   step= 6 pid=top_cross      arm=lft motion=z via=single-arm
+失败步骤数: 1
+  [FAIL] step= 5 pid=middle_plate   reason=middle_plate lft motion=y_minus: PickPlacePlanner failed: no valid grasp/path found.
+
+注意：失败步骤不会播放动画；成功步骤会继续播放。
+
+========== 动画控制 ==========
+  按 SPACE 推进 1 帧；全部播放完后再按 SPACE 重新开始（循环）。
+  可播放成功步骤数：5
+  [anime] step= 1 pid=post_br        frames=  35 carry_start=4 staging_pos=[0.0766, -0.2786, 0.003]
+  [anime] step= 2 pid=post_fr        frames=  33 carry_start=4 staging_pos=[0.1296, -0.44, 0.003]
+  [anime] step= 3 pid=post_bl        frames=  26 carry_start=4 staging_pos=[0.3502, -0.2161, 0.003]
+  [anime] step= 4 pid=post_fl        frames=  36 carry_start=4 staging_pos=[0.4328, 0.178, 0.003]
+  [anime] step= 6 pid=top_cross      frames=  31 carry_start=4 staging_pos=[0.0705, -0.3627, 0.003]
+[动画] step=1 post_br 进入 CARRY: frame=4, staging 模型 detach。

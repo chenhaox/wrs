@@ -1,30 +1,30 @@
 {
-  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_optimal_initial.layout",
-  "score": 0.4818822719877366,
+  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_heatmap_pso_test.layout",
+  "score": 0.5973415907395133,
   "xy": {
     "post_br": [
-      0.45799166642129424,
-      -0.6724463752734967
+      0.4372564014477206,
+      -0.5043166268722765
     ],
     "post_fr": [
-      0.45799166642129424,
-      -0.48230617515880303
+      0.10328558690206696,
+      -0.29947149540077234
     ],
     "post_bl": [
-      0.36277829893618985,
-      -0.06114516513787102
+      0.18261453358085913,
+      -0.42769079963827733
     ],
     "post_fl": [
-      0.322307634746037,
-      0.11939390676718176
+      0.203422210958537,
+      -0.35874013351945994
     ],
     "middle_plate": [
-      0.16144181450375877,
+      0.16693154828572046,
       0.17919999971985817
     ],
     "top_cross": [
-      0.2017393254506913,
-      -0.2646961432543332
+      0.12289527704375144,
+      -0.19687550010894206
     ],
     "base_plate": [
       0.3725000035762787,
@@ -87,12 +87,12 @@
   },
   "grasp_counts": {
     "base_plate": 20,
-    "post_br": 13,
-    "post_fr": 43,
-    "post_bl": 35,
-    "post_fl": 7,
-    "middle_plate": 78,
-    "top_cross": 27
+    "post_br": 20,
+    "post_fr": 33,
+    "post_bl": 49,
+    "post_fl": 35,
+    "middle_plate": 23,
+    "top_cross": 24
   },
   "arm_choice": {
     "base_plate": "preassembled",
@@ -104,11 +104,11 @@
     "top_cross": "lft"
   },
   "score_components": {
-    "grasp": 0.5187268298890872,
-    "manip": 0.28326624004729073,
-    "dist": 0.587883740397904,
+    "grasp": 0.8073949564684463,
+    "manip": 0.09903292091073013,
+    "dist": 0.6350750716770314,
     "rot": 0.7414116311178057,
-    "spatial_y_distribution": 0.825
+    "spatial_y_distribution": 0.7486150581067476
   },
   "spatial_constraints": {
     "min_staging_mesh_clearance": 0.01,

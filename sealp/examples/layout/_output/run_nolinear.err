@@ -1,0 +1,6 @@
+D:\Project\wrs-sealp\wrs\grasping\planning\segmentation.py:51: RuntimeWarning: invalid value encountered in arccos
+  angle_array = np.arccos(face_normals[next_adj_list].dot(seed_face_normal.T))  # it seems clipping is not needed
+D:\Project\wrs-sealp\wrs\grasping\planning\segmentation.py:64: RuntimeWarning: invalid value encountered in arccos
+  angle_array = np.arccos(adj_face_normal_array.dot(adj_face_normal_array.T))
+D:\Project\wrs-sealp\wrs\basis\robot_math.py:920: RuntimeWarning: invalid value encountered in divide
+  ax = deltaw / angle if isinstance(deltaw, np.ndarray) else None

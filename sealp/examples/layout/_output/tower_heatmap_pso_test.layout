@@ -1,8 +1,8 @@
 # SEALP Workspace Layout v1.0
-# tower_optimal_initial
+# tower_heatmap_pso_test
 
 format_version: '1.0'
-name: tower_optimal_initial
+name: tower_heatmap_pso_test
 robot_base:
   pos:
   - !!float '0'
@@ -51,8 +51,8 @@ staging:
       - !!float '1'
   post_br:
     pos:
-    - 0.457992
-    - -0.672446
+    - 0.437256
+    - -0.504317
     - 0.003
     rotmat:
     - - !!float '1'
@@ -66,8 +66,8 @@ staging:
       - !!float '1'
   post_fr:
     pos:
-    - 0.457992
-    - -0.482306
+    - 0.103286
+    - -0.299471
     - 0.003
     rotmat:
     - - !!float '1'
@@ -81,8 +81,8 @@ staging:
       - !!float '1'
   post_bl:
     pos:
-    - 0.362778
-    - -0.0611452
+    - 0.182615
+    - -0.427691
     - 0.003
     rotmat:
     - - !!float '1'
@@ -96,8 +96,8 @@ staging:
       - !!float '1'
   post_fl:
     pos:
-    - 0.322308
-    - 0.119394
+    - 0.203422
+    - -0.35874
     - 0.003
     rotmat:
     - - !!float '1'
@@ -111,7 +111,7 @@ staging:
       - !!float '1'
   middle_plate:
     pos:
-    - 0.161442
+    - 0.166932
     - 0.1792
     - 0.063
     rotmat:
@@ -126,8 +126,8 @@ staging:
       - !!float '0'
   top_cross:
     pos:
-    - 0.201739
-    - -0.264696
+    - 0.122895
+    - -0.196876
     - 0.003
     rotmat:
     - - !!float '1'
@@ -143,13 +143,15 @@ metadata:
   search_method: weighted_random_on_work_table
   l3_pass: false
   l3_fail_reason: ''
-  score: 0.481882
+  l3_skip_parts:
+  - middle_plate
+  score: 0.597342
   score_components:
-    grasp: 0.518727
-    manip: 0.283266
-    dist: 0.587884
+    grasp: 0.807395
+    manip: 0.0990329
+    dist: 0.635075
     rot: 0.741412
-    spatial_y_distribution: 0.825
+    spatial_y_distribution: 0.748615
   spatial_constraints:
     min_staging_mesh_clearance: 0.01
     enforce_order_x_constraint: false
@@ -178,9 +180,9 @@ metadata:
       if smaller, prefer right half table; fallback to full table
     robot_home_clearance: 0.03
   weights:
-    grasp: 0.2
-    manip: 0.35
-    dist: 0.3
+    grasp: 0.4
+    manip: 0.2
+    dist: 0.25
     rot: 0.15
   part_order:
   - base_plate
@@ -216,12 +218,12 @@ metadata:
     - -0.62
   grasp_counts:
     base_plate: 20
-    post_br: 13
-    post_fr: 43
-    post_bl: 35
-    post_fl: 7
-    middle_plate: 78
-    top_cross: 27
+    post_br: 20
+    post_fr: 33
+    post_bl: 49
+    post_fl: 35
+    middle_plate: 23
+    top_cross: 24
   topdown_counts_identity:
     post_br: 572
     post_fr: 572
@@ -263,19 +265,19 @@ metadata:
     top_cross: 0.003
   per_part_dist:
     base_plate: !!float '0'
-    post_br: 0.371945
-    post_fr: 0.086822
-    post_bl: 0.246279
-    post_fl: 0.518402
-    middle_plate: 0.575916
-    top_cross: 0.245857
+    post_br: 0.203275
+    post_fr: 0.34757
+    post_bl: 0.178833
+    post_fl: 0.113042
+    middle_plate: 0.573927
+    top_cross: 0.331299
   per_part_manip:
     base_plate: !!float '0'
-    post_br: 0.0166283
-    post_fr: 0.0150996
-    post_bl: 0.0159333
-    post_fl: 0.0140907
-    middle_plate: 0.00818881
+    post_br: 0.0152254
+    post_fr: !!float '0'
+    post_bl: !!float '0'
+    post_fl: !!float '0'
+    middle_plate: 0.00667473
     top_cross: !!float '0'
   per_part_rot_angle:
     base_plate: !!float '0'

@@ -167,6 +167,7 @@ DEFAULT_STRICT_INITIAL_ROBOT_COLLISION = True
 # 2) 装配顺序越靠后的零件，默认不允许比前一个待装零件放得更远，也就是 x 更大；
 # 3) y 方向尽量往两侧分布，作为 layout 分数的小幅加成。
 DEFAULT_MIN_STAGING_MESH_CLEARANCE = 0.01
+
 DEFAULT_ENFORCE_ORDER_X_CONSTRAINT = True
 DEFAULT_ORDER_X_TOLERANCE = 0.03
 DEFAULT_ENABLE_Y_SIDE_DISTRIBUTION_SCORE = True
@@ -197,11 +198,10 @@ DEFAULT_L2_PICK_CHECK_TILT = 0.35
 # 注意：该距离检查依赖能否从 WRS robot link 提取 mesh/AABB；如果提取失败，会自动退化为原来的碰撞检查。
 DEFAULT_ROBOT_HOME_CLEARANCE = 0.03
 
-# 默认权重，总和建议为 1.0
-DEFAULT_W_GRASP = 0.40
-DEFAULT_W_MANIP = 0.15
-DEFAULT_W_DIST = 0.25
-DEFAULT_W_ROT = 0.20
+DEFAULT_W_GRASP = 0.3
+DEFAULT_W_MANIP = 0.3
+DEFAULT_W_DIST = 0.15
+DEFAULT_W_ROT = 0.25
 
 
 # ============================================================
@@ -223,15 +223,35 @@ DEFAULT_N_SAMPLES = 10
 DEFAULT_SEED = 0
 DEFAULT_CDPRIM_TYPE = "triangles"
 
-# L2 只负责快速筛候选，none 可以避免 WRS gripper 粗碰撞误杀；
-# 最终是否真的全程不碰撞，由 L3_OBSTACLE_MODE="mesh" 严格验证。
-DEFAULT_L2_OBSTACLE_MODE = "none"
+# L2 抓取校验默认 staging_aware: 排除桌面误杀 + 已装件接触豁免 + 其它 staging 件做障碍。
+# 不把桌面放进抓取校验(见下方说明): 零件贴桌摆放时, 把桌面当障碍会误杀几乎所有低位抓取
+# (连站立细杆 post 都被判 no_common_gids)。执行时的桌面安全改由"让细长件站立"保证:
+# 站立的 post 小面触地, 抓取点在杆身/顶部, 天然远离桌面。executor_match 仍作为可选模式保留。
+DEFAULT_L2_OBSTACLE_MODE = "staging_aware"
 
 # 默认只保存 L2 结果；严格 L3 很慢，需要时用 --enable-l3 打开。
+# L3 与 L2 保持同一障碍口径(staging_aware), 保证 L2 通过的公共抓取不会在 L3 被二次否决。
 DEFAULT_ENABLE_L3 = False
 DEFAULT_L3_TOP_K = 3
-DEFAULT_L3_OBSTACLE_MODE = "mesh"
+DEFAULT_L3_OBSTACLE_MODE = "staging_aware"
+
+# L3 全流程验证时跳过运动规划的零件(逗号分隔)。
+# middle_plate 这类大件在 L3 里的取放直线段/RRT 常因为过严而失败, 但实际执行没问题;
+# 跳过后仍把它当作已放置(计入后续零件的 step-aware 障碍), 只是不对它本身做 L3 运动验证,
+# 其余零件照常严格验证。
+DEFAULT_L3_SKIP_PARTS = "middle_plate"
 DEFAULT_ALLOW_L2_FALLBACK = True
+
+# ---- 默认姿态保持 (default resting-face / STL up-face preservation) ----
+# 泛化性软偏好: 对"有指向性"的件(细长杆 / 扁平板), 在没有 topdown 硬约束时,
+# 倾向保持它 STL 默认姿态下的朝上轴仍朝上 —— 即细杆保持"站立"、扁板保持"平放",
+# 而不是被翻倒。这样细长 post 不会平躺贴桌导致执行取放撞桌。
+# 判定完全基于几何(STL 默认 extent 的指向性 + 候选把 STL-Z 轴翻转多少度), 无需针对具体零件硬编码。
+# 这是软惩罚: 只有当直立/默认姿态确实存在 common grasp 时它才会胜出;
+# 若默认姿态没有可行抓取, 带惩罚的其它姿态仍可被选中(不会把零件卡死)。
+DEFAULT_PREFER_STL_UPFACE = True
+DEFAULT_W_STL_UPFACE = 0.35            # 惩罚权重(相对归一化后的 part_score, 量级~[0,1])
+DEFAULT_STL_UPFACE_MIN_THINNESS = 0.20  # 只对 thinness>=此值(足够细长/扁平)的件生效
 
 
 # ============================================================
@@ -273,6 +293,8 @@ class LayoutCandidate:
     spatial_score_norm: float = 0.0
     topdown_counts: Dict[str, int] = field(default_factory=dict)
     fail_reason: str = ""
+    fail_part: Optional[str] = None
+    fail_detail: Dict[str, int] = field(default_factory=dict)
     l2_pass: bool = False
     l3_pass: bool = False
     l3_fail_reason: str = ""
@@ -791,7 +813,11 @@ class WeightedInitialLayoutSearcher:
                  l2_pick_check_lift_dist: float = DEFAULT_L2_PICK_CHECK_LIFT_DIST,
                  l2_pick_check_directions: Optional[List[str]] = None,
                  l2_pick_check_tilt: float = DEFAULT_L2_PICK_CHECK_TILT,
-                 robot_home_clearance: float = DEFAULT_ROBOT_HOME_CLEARANCE):
+                 robot_home_clearance: float = DEFAULT_ROBOT_HOME_CLEARANCE,
+                 l3_skip_parts: Optional[List[str]] = None,
+                 prefer_stl_upface: bool = DEFAULT_PREFER_STL_UPFACE,
+                 w_stl_upface: float = DEFAULT_W_STL_UPFACE,
+                 stl_upface_min_thinness: float = DEFAULT_STL_UPFACE_MIN_THINNESS):
         self.asmdef_path = os.path.abspath(asmdef_path)
         self.config_yaml = os.path.abspath(config_yaml)
         self.grasp_dir = os.path.abspath(grasp_dir)
@@ -840,10 +866,17 @@ class WeightedInitialLayoutSearcher:
         self.l2_pick_check_directions = list(l2_pick_check_directions or _parse_part_order(DEFAULT_L2_PICK_CHECK_DIRECTIONS) or ["z"])
         self.l2_pick_check_tilt = float(l2_pick_check_tilt)
         self.robot_home_clearance = max(0.0, float(robot_home_clearance))
+        # L3 全流程验证时跳过运动规划的零件(见 DEFAULT_L3_SKIP_PARTS 注释)。
+        self.l3_skip_parts = set(l3_skip_parts or [])
         self._home_robot_aabbs_cache = None
 
         self.mesh_vertices: Dict[str, np.ndarray] = {}
+        self.identity_extent: Dict[str, np.ndarray] = {}
         self.topdown_identity_counts: Dict[str, int] = {}
+        # 默认姿态保持软偏好参数
+        self.prefer_stl_upface = bool(prefer_stl_upface)
+        self.w_stl_upface = max(0.0, float(w_stl_upface))
+        self.stl_upface_min_thinness = float(stl_upface_min_thinness)
         self.current_assembly_region_id = "fixed"
         self.current_assembly_region_rc = (-1, -1)
 
@@ -954,6 +987,7 @@ class WeightedInitialLayoutSearcher:
             cands: List[RotCandidate] = []
 
             _, _, identity_extent = _bounds_after_rotation(verts, np.eye(3))
+            self.identity_extent[pid] = np.asarray(identity_extent, dtype=float)
             is_flat = float(identity_extent.min() / max(identity_extent.max(), 1e-9)) < 0.22
 
             for rot_name, fs_pos, R in pose_rots:
@@ -999,6 +1033,22 @@ class WeightedInitialLayoutSearcher:
                 return (group, float(c.extent[2]), float(np.linalg.norm(c.extent[:2])))
 
             cands.sort(key=_sort_key)
+
+            # 强制旋转: 某些件(如 middle_plate)只允许指定的 rot_name。
+            # 这是用户显式要求的"直接强制板子直立方式", 用于绕过排序里 fs_* 优先
+            # 把 rot90_04(长边直立, 可被 handover 抓取)挤掉的问题。
+            forced_map = getattr(self, "force_rot_name", None) or {}
+            forced = forced_map.get(pid)
+            if forced:
+                matched = [c for c in cands if str(c.rot_name) == str(forced)]
+                if matched:
+                    cands = matched
+                    print(f"  [FORCE-ROT] {pid}: 仅保留 rot_name={forced} "
+                          f"({len(matched)} 候选)")
+                else:
+                    print(f"  [FORCE-ROT][WARN] {pid}: 未找到 rot_name={forced}, "
+                          f"保留全部候选")
+
             self.rot_cands[pid] = cands[:self.max_rot_candidates]
 
             print(f"{pid:16s}: {len(self.rot_cands[pid])} candidates")
@@ -1341,7 +1391,7 @@ class WeightedInitialLayoutSearcher:
         return float(np.sqrt(np.min(np.sum(diff * diff, axis=2))))
 
     def _mesh_clearance_reason(self, active_pids: Optional[List[str]] = None) -> Optional[str]:
-        """检查 staging 零件之间的外轮廓间距是否至少为 min_staging_mesh_clearance。
+        """检查 staging 零件之间的外轮廓间距是否满足要求。
 
         先用 AABB 快速判断；如果 AABB 间距已经大于阈值，则直接通过；
         如果 AABB 太近，再用 mesh 顶点最小距离近似复核。
@@ -1370,7 +1420,7 @@ class WeightedInitialLayoutSearcher:
                     continue
                 vtx_d = self._vertex_distance_between_world_vertices(va, vb)
                 if vtx_d < min_clear:
-                    return f"{a} vs {b}: clearance={vtx_d:.4f}m < {min_clear:.4f}m"
+                    return f"{a} vs {b}: clearance={vtx_d:.4f}m < required {min_clear:.4f}m"
         return None
 
     def _order_x_constraint_reason(self, layout: LayoutCandidate) -> Optional[str]:
@@ -1415,6 +1465,43 @@ class WeightedInitialLayoutSearcher:
             return float(cand.extent[2]) > float(identity_extent[2]) * 1.8
         except Exception:
             return False
+
+    def _part_thinness(self, pid: str) -> float:
+        """零件"指向性"度量: 1 - min_extent/max_extent, 基于 STL 默认(identity)包围盒。
+
+        细长杆(post: 0.024x0.024x0.135) -> ~0.82; 扁平板(0.195x0.15x0.024) -> ~0.88;
+        近似立方体 -> ~0。越接近 1 越"有明确朝向", 越应该保持 STL 默认摆放不翻倒。
+        """
+        ext = self.identity_extent.get(pid)
+        if ext is None:
+            return 0.0
+        mx = float(np.max(ext))
+        if mx <= 1e-9:
+            return 0.0
+        return float(1.0 - float(np.min(ext)) / mx)
+
+    def _stl_upface_flip_penalty(self, pid: str, cand: RotCandidate) -> float:
+        """默认姿态保持惩罚 ∈ [0, ~1]。
+
+        含义: 候选姿态把"STL 默认朝上轴(世界+Z)"翻转了多少 —— 翻得越多、零件越有指向性,
+        惩罚越大。
+
+        - tilt = STL 的 +Z 轴(经候选旋转后 = rotmat[:,2])与世界 +Z 的夹角。
+          identity(站立/平放不翻) -> rotmat[2,2]=1 -> tilt=0 -> 惩罚 0;
+          翻倒 90° -> rotmat[2,2]=0 -> tilt=90° -> 惩罚最大。
+        - 用 thinness 缩放: 只有细长/扁平件翻倒才明显扣分, 近似立方体几乎不受影响。
+        - thinness < min_thinness 的件直接不惩罚(没有明确"该朝哪"的方向)。
+        """
+        if not self.prefer_stl_upface or self.w_stl_upface <= 0.0:
+            return 0.0
+        thinness = self._part_thinness(pid)
+        if thinness < self.stl_upface_min_thinness:
+            return 0.0
+        R = np.asarray(cand.rotmat, dtype=float)
+        up_cos = float(np.clip(R[2, 2], -1.0, 1.0))
+        tilt = float(np.arccos(up_cos))            # 0..pi
+        tilt_frac = min(1.0, tilt / (np.pi / 2.0))  # 0..1 (>=90° 视为完全翻倒)
+        return float(thinness * tilt_frac)
 
     def _upright_preference_adjusted_score(self, pid: str, cand: RotCandidate, part_score: float) -> float:
         """兼容旧评分接口。
@@ -1945,19 +2032,95 @@ class WeightedInitialLayoutSearcher:
                 obs.append(self.staging_models[pid])
         return obs
 
-    def _planner_obstacles(self, obs: List) -> List:
+    # --------------------------------------------------------
+    # 接触/插接豁免 (与 execute_layout_sequence_visual 口径一致)
+    # --------------------------------------------------------
+
+    def _contact_exclusion_map(self) -> Dict[str, List[str]]:
+        """默认接触/插接豁免表 (惰性构建, 缓存到 self).
+
+        与执行脚本 _default_contact_exclusion_map 保持一致:
+            - top_cross 插入 middle_plate 顶面方孔 -> 规划 top_cross 时排除 middle_plate;
+            - middle_plate 承托在四根 post 顶端    -> 规划 middle_plate 时排除四根 post。
+        另外每个零件 asmdef 里的 direct parent 也会在 _contact_exclusion_set 里自动排除。
+        """
+        cached = getattr(self, "_contact_excl_map_cache", None)
+        if cached is not None:
+            return cached
+        part_ids = set(self.part_order)
+        out: Dict[str, List[str]] = {}
+        if "top_cross" in part_ids and "middle_plate" in part_ids:
+            out.setdefault("top_cross", []).append("middle_plate")
+        post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
+        if "middle_plate" in part_ids and post_ids:
+            out.setdefault("middle_plate", []).extend(post_ids)
+        self._contact_excl_map_cache = out
+        return out
+
+    def _part_parent_map(self) -> Dict[str, str]:
+        cached = getattr(self, "_part_parent_cache", None)
+        if cached is not None:
+            return cached
+        out: Dict[str, str] = {}
+        for s in getattr(self.asm, "steps", []):
+            pid = getattr(s, "part_id", None)
+            par = getattr(s, "parent_id", None)
+            if pid is not None and par is not None:
+                out[pid] = par
+        self._part_parent_cache = out
+        return out
+
+    def _contact_exclusion_set(self, current_pid: Optional[str], placed: set) -> set:
+        """规划 current_pid 时应临时排除的"已装接触件"集合。
+
+        = direct parent (非 fixture) ∪ 接触表声明 , 再 ∩ 已装件。
+        只有"已经装好"的接触件才豁免; 还没装的零件仍应作为 staging 障碍。
+        """
+        if not current_pid:
+            return set()
+        excl = set()
+        parent = self._part_parent_map().get(current_pid)
+        if parent and parent != "fixture":
+            excl.add(parent)
+        for p in self._contact_exclusion_map().get(current_pid, []):
+            excl.add(p)
+        return {p for p in excl if p in (placed or set())}
+
+    def _planner_obstacles(self, obs: List, current_pid: Optional[str] = None,
+                           placed: Optional[set] = None) -> List:
         """给 reason_common_gids 使用的 obstacle_list。
 
-        mesh:      使用 mesh/triangles CollisionModel，推荐；
-        env_only:  只保留 work_table 等环境；
-        none:      不把 obstacle 传进 WRS 的 gripper collision，避免 box/cdprim
-                   误杀；仍会保留 staging 零件之间的 mesh/triangles 复检。
+        mesh:          全部 triangles/mesh 碰撞。对本塔这种堆叠装配会被桌面 mesh +
+                       接触面 mesh 大量误杀, 通常找不到任何解, 不推荐。
+        env_only:      只保留 work_table 等环境。
+        none:          不传任何障碍, 彻底避免 gripper 的 box/cdprim/桌面误杀。
+        staging_aware: 推荐。排除环境(桌面)误杀 + 保留已装件(weighted_goal, 但按
+                       parent/接触表豁免当前件要插接/承托的那些已装件, 与执行脚本一致)
+                       + 保留其它 staging 件(weighted_staging) 作障碍。这样既不会像
+                       mesh 那样被桌面/接触面误杀, 又能避免某个零件被周围 staging 件
+                       包围、执行时根本抓不进去。
         """
         mode = self.planner_obstacle_mode
         if mode == "none":
             return []
         if mode == "env_only":
             return [o for o in obs if getattr(o, "_sealp_role", None) == "environment_obstacle"]
+        if mode in ("staging_aware", "executor_match"):
+            # executor_match = staging_aware + 保留工作台桌面(与执行脚本 _placement_obstacles
+            # 逐项一致); staging_aware 则排除桌面, 避免贴桌零件抓取被薄桌盒误杀(默认)。
+            keep_env = (mode == "executor_match")
+            excluded = self._contact_exclusion_set(current_pid, placed or set())
+            out = []
+            for o in obs:
+                role = getattr(o, "_sealp_role", None)
+                if role == "environment_obstacle":
+                    if keep_env:
+                        out.append(o)
+                    continue
+                if role == "weighted_goal" and getattr(o, "_sealp_part_id", None) in excluded:
+                    continue  # 接触豁免: 排除当前件插接/承托的已装件
+                out.append(o)  # 其它 weighted_goal + 全部 weighted_staging 都保留
+            return out
         return obs
 
     def _l2_pick_direction_vectors(self) -> List[Tuple[str, np.ndarray]]:
@@ -2111,6 +2274,8 @@ class WeightedInitialLayoutSearcher:
 
         placed = set()
         fail_detail = {}
+        layout.fail_part = None
+        layout.fail_detail = {}
 
         # 第一件直接对齐当前装配区中心，视为已经装好，不再做 pick-and-place。
         first_pid = self._first_part_id() if self.preassemble_first_part else None
@@ -2121,6 +2286,7 @@ class WeightedInitialLayoutSearcher:
         # 新增硬约束：后装零件不要比前装零件放得更远，也就是 x 不应明显变大。
         order_x_hit = self._order_x_constraint_reason(layout)
         if order_x_hit:
+            layout.fail_part = "order_x_constraint"
             layout.fail_reason = order_x_hit
             return False
 
@@ -2132,6 +2298,7 @@ class WeightedInitialLayoutSearcher:
 
             gc = self._grasp_collection(pid)
             if gc is None or len(gc) == 0:
+                layout.fail_part = pid
                 layout.fail_reason = f"{pid}: grasp collection missing or empty"
                 return False
 
@@ -2192,7 +2359,7 @@ class WeightedInitialLayoutSearcher:
                 sp = self.staging_models[pid].pos.copy()
                 sr = self.staging_models[pid].rotmat.copy()
                 obs = self._step_obstacles(pid, placed)
-                planner_obs = self._planner_obstacles(obs)
+                planner_obs = self._planner_obstacles(obs, current_pid=pid, placed=placed)
 
                 for arm_tag in self._arm_order(pid):
                     arm = self.robot.rgt_arm if arm_tag == "rgt" else self.robot.lft_arm
@@ -2207,6 +2374,125 @@ class WeightedInitialLayoutSearcher:
                     except Exception:
                         fail_counter["reason_exception"] += 1
                         gids = []
+
+                    # ---- 诊断: 桌面是否误杀该姿态的抓取(SEALP_TABLE_PROBE=部件名 打开) ----
+                    # 对比三种障碍口径下该 (staging,goal) 姿态的 common grasp 数:
+                    #   n_notable  = 当前(staging_aware, 不含桌面)
+                    #   n_table    = 追加真实桌面
+                    #   n_sunk     = 追加下沉 0.1m 的桌面(等效"抬高抓取余量")
+                    # 若 n_notable>0 且 n_table=0:
+                    #   - n_sunk 恢复 -> 抓取确实贴桌(低位/蹭桌), 站立也救不回低位抓取;
+                    #   - n_sunk 仍=0 -> 桌面碰撞盒误杀(与高度无关的几何/位姿 bug)。
+                    _probe = os.environ.get("SEALP_TABLE_PROBE")
+                    if _probe and pid == _probe:
+                        def _cnt(poses, extra_obs):
+                            try:
+                                g = planner.reason_common_gids(
+                                    grasp_collection=gc,
+                                    goal_pose_list=poses,
+                                    obstacle_list=list(planner_obs) + list(extra_obs),
+                                )
+                                return len(g) if g else 0
+                            except Exception:
+                                return -1
+                        sunk = []
+                        for _o in self.env_obs:
+                            try:
+                                _c = _o.copy()
+                                _p = np.asarray(_c.pos, dtype=float).copy(); _p[2] -= 0.10
+                                _c.pos = _p
+                                sunk.append(_c)
+                            except Exception:
+                                sunk.append(_o)
+                        both = [(sp, sr), (gp, gr)]
+                        n_notable = len(gids) if gids else 0
+                        n_table = _cnt(both, self.env_obs)
+                        n_sunk = _cnt(both, sunk)
+                        # 厚桌面测试: 顶面仍在 z=0, 但盒子加厚到 0.30m(消除薄 trimesh 数值问题)
+                        try:
+                            thick = mcm.gen_box(np.array([0.6, 1.2, 0.30]),
+                                                np.array([0.23, -0.35, -0.15]))
+                            n_thick = _cnt(both, [thick])
+                        except Exception as _te:
+                            n_thick = -2
+                        # 分别看 staging 端 / goal 端各自被真实桌面误杀多少
+                        n_stage_nt = _cnt([(sp, sr)], [])
+                        n_stage_tb = _cnt([(sp, sr)], self.env_obs)
+                        n_goal_nt = _cnt([(gp, gr)], [])
+                        n_goal_tb = _cnt([(gp, gr)], self.env_obs)
+                        print(f"[TABLE-PROBE] pid={pid:10s} pose={cand.tag:16s} rot={cand.rot_name:10s} "
+                              f"arm={arm_tag} z_off={cand.z_offset:.3f} up={float(cand.rotmat[2,2]):+.2f} "
+                              f"| both: nt={n_notable:3d} tb={n_table:3d} sunk={n_sunk:3d} thick={n_thick:3d} "
+                              f"| stage: nt={n_stage_nt:3d} tb={n_stage_tb:3d} "
+                              f"| goal: nt={n_goal_nt:3d} tb={n_goal_tb:3d} "
+                              f"| sp_z={float(sp[2]):.3f} gp_z={float(gp[2]):.3f}")
+                        # 逐抓取量出"夹爪最低点 z" vs 桌面顶(z=0): 判断到底是真的探到桌下, 还是碰撞误判。
+                        if cand.tag == "identity" and arm_tag == "rgt":
+                            from panda3d.core import Point3
+                            try:
+                                g_stage = planner.reason_common_gids(
+                                    grasp_collection=gc, goal_pose_list=[(sp, sr)], obstacle_list=[])
+                                g_stage = list(g_stage) if g_stage else []
+                            except Exception:
+                                g_stage = []
+                            for gi in g_stage[:6]:
+                                try:
+                                    grasp = gc._grasp_list[gi] if hasattr(gc, "_grasp_list") else gc[gi]
+                                    ac_pos = np.asarray(sr, float) @ np.asarray(grasp.ac_pos, float) + np.asarray(sp, float)
+                                    ac_rot = np.asarray(sr, float) @ np.asarray(grasp.ac_rotmat, float)
+                                    arm.end_effector.grip_at_by_pose(
+                                        jaw_center_pos=ac_pos, jaw_center_rotmat=ac_rot,
+                                        jaw_width=grasp.ee_values)
+                                    gmin = 1e9      # 真实 mesh 世界最低点
+                                    cdtypes = []
+                                    for el in arm.end_effector.cdelements:
+                                        cmo = getattr(el, "cmodel", None)
+                                        if cmo is None:
+                                            continue
+                                        cdtypes.append(str(getattr(cmo, "cdmesh_type", "?")))
+                                        try:
+                                            # 用碰撞模型自身的世界位姿(cmo.pos/rotmat, 即碰撞真正使用的口径)
+                                            cpos = np.asarray(cmo.pos, dtype=float)
+                                            crot = np.asarray(cmo.rotmat, dtype=float)
+                                            verts = np.asarray(cmo.trm_mesh.vertices, dtype=float)
+                                            wz = (verts @ crot.T + cpos)[:, 2]
+                                            gmin = min(gmin, float(np.min(wz)))
+                                        except Exception:
+                                            pass
+                                    approach = ac_rot[:, 2]  # 夹爪 +z(接近方向)在世界系
+                                    # 只测"夹爪 vs 桌面"(不含手臂), 区分是夹爪误杀还是手臂撞桌
+                                    try:
+                                        eef_hit = arm.end_effector.is_mesh_collided(cmodel_list=list(self.env_obs))
+                                    except Exception as _ee:
+                                        eef_hit = f"err:{_ee}"
+                                    # IK 多解测试: home 种子的解碰不碰? 换多个随机种子里有没有不碰的解?
+                                    home_free = None
+                                    seeds_tried = 0
+                                    seeds_free = 0
+                                    try:
+                                        jr = np.asarray(arm.jnt_ranges, dtype=float)
+                                        rng = np.random.default_rng(gi)
+                                        jv0 = arm.ik(tgt_pos=ac_pos, tgt_rotmat=ac_rot)
+                                        if jv0 is not None:
+                                            arm.goto_given_conf(jv0)
+                                            home_free = not arm.is_collided(obstacle_list=list(self.env_obs))
+                                        for _ in range(16):
+                                            seed = jr[:, 0] + rng.random(jr.shape[0]) * (jr[:, 1] - jr[:, 0])
+                                            jv = arm.ik(tgt_pos=ac_pos, tgt_rotmat=ac_rot, seed_jnt_values=seed)
+                                            if jv is None:
+                                                continue
+                                            seeds_tried += 1
+                                            arm.goto_given_conf(jv)
+                                            if not arm.is_collided(obstacle_list=list(self.env_obs)):
+                                                seeds_free += 1
+                                    except Exception as _ie:
+                                        home_free = f"err:{_ie}"
+                                    print(f"    [GRIPPER] gid={gi:4d} jaw_z={float(ac_pos[2]):+.3f} "
+                                          f"mesh_min_z={gmin:+.3f} eef_vs_table={eef_hit} "
+                                          f"| IK home_seed_collisionfree={home_free} "
+                                          f"random_seeds: free={seeds_free}/{seeds_tried}")
+                                except Exception as _e:
+                                    print(f"    [GRIPPER] gid={gi} measure failed: {_e}")
 
                     n = len(gids)
                     if n <= 0:
@@ -2254,6 +2540,11 @@ class WeightedInitialLayoutSearcher:
                     # 如果该零件原始姿态下从上往下抓取太少，强制只能选择 upright / 侧立姿态。
                     part_score = self._upright_preference_adjusted_score(pid, cand, part_score)
 
+                    # 默认姿态保持: 细长/扁平件翻倒(偏离 STL 默认朝向)时软扣分,
+                    # 让细杆 post 优先"站立"、扁板优先"平放", 从而执行取放时天然远离桌面。
+                    # 软惩罚 -> 只有默认姿态确实存在 common grasp 时才会胜出。
+                    part_score = part_score - self.w_stl_upface * self._stl_upface_flip_penalty(pid, cand)
+
                     record = (
                         part_score, n, manip, dist, rot_ang,
                         arm_tag, cand, sp.copy(),
@@ -2263,6 +2554,8 @@ class WeightedInitialLayoutSearcher:
 
             if best_record is None:
                 fail_detail[pid] = dict(fail_counter)
+                layout.fail_part = pid
+                layout.fail_detail = dict(fail_counter)
                 layout.fail_reason = f"{pid}: all rotation/arm candidates failed; fail_counter={fail_counter}"
                 return False
 
@@ -2299,17 +2592,20 @@ class WeightedInitialLayoutSearcher:
                 if _cand is not None:
                     _khit = self._staging_arm_keepout_reason(_pid, layout.xy[_pid], _cand)
                     if _khit:
+                        layout.fail_part = "final_staging_arm_keepout"
                         layout.fail_reason = f"final staging arm keepout violation: {_khit}"
                         return False
 
         # 最终复检所有 staging 不碰撞
         hit = self._pairwise_collision()
         if hit:
+            layout.fail_part = "final_pairwise_collision"
             layout.fail_reason = f"final staging collision: {hit}"
             return False
 
         clearance_hit = self._mesh_clearance_reason(active_pids=self.part_order)
         if clearance_hit:
+            layout.fail_part = "final_mesh_clearance"
             layout.fail_reason = f"final staging mesh clearance too small: {clearance_hit}"
             return False
 
@@ -2317,11 +2613,13 @@ class WeightedInitialLayoutSearcher:
         # 这一步可以过滤掉 middle_plate 立起来后插进机械手/夹爪的 layout。
         home_hit = self._robot_home_collision_reason(active_pids=self.part_order)
         if home_hit:
+            layout.fail_part = "final_robot_home_collision"
             layout.fail_reason = f"final robot home collision: {home_hit}"
             return False
 
         home_clear_hit = self._robot_home_clearance_reason(active_pids=self.part_order)
         if home_clear_hit:
+            layout.fail_part = "final_robot_home_clearance"
             layout.fail_reason = f"final robot home clearance too small: {home_clear_hit}"
             return False
 
@@ -2400,18 +2698,49 @@ class WeightedInitialLayoutSearcher:
             - work_table 等环境：按 mode 决定是否加入。
         """
         obs = []
-        if mode != "none":
-            if mode in ("mesh", "env_only"):
-                obs.extend(self.env_obs)
-            if mode == "mesh":
-                for pid in placed:
-                    if pid in self.goal_models:
-                        obs.append(self.goal_models[pid])
-                for pid in self.part_order:
-                    if pid == current_pid or pid in placed:
-                        continue
-                    if pid in self.staging_models:
-                        obs.append(self.staging_models[pid])
+        if mode == "none":
+            return obs
+        if mode in ("mesh", "env_only", "executor_match"):
+            obs.extend(self.env_obs)
+        # mesh/executor_match: 含桌面; staging_aware: 排除桌面, 与 L2 _planner_obstacles 同口径。
+        if mode in ("mesh", "staging_aware", "executor_match"):
+            for pid in placed:
+                if pid in self.goal_models:
+                    obs.append(self.goal_models[pid])
+            for pid in self.part_order:
+                if pid == current_pid or pid in placed:
+                    continue
+                if pid in self.staging_models:
+                    obs.append(self.staging_models[pid])
+        return obs
+
+    def _l3_placement_obstacles(self, current_pid: str, placed: set, mode: str = "mesh") -> List:
+        """L3 抓取/落位 IK 校验用障碍(传给 transport.plan 的 grasp_obstacle_list)。
+
+        与执行脚本 _placement_obstacles 口径一致: 对【已装好的接触件】(direct parent /
+        承托件, 如 post 脚下的 base_plate、middle_plate 下的四柱)做接触豁免, 否则
+        零件落位时脚下的支撑件会把抓取 IK 全判成碰撞 -> "No common grasp id" ->
+        L3 比真实执行严格得多、永远过不了。运输路径仍用完整障碍(_l3_obstacles)。
+        """
+        obs = []
+        if mode == "none":
+            return obs
+        if mode in ("mesh", "env_only", "executor_match"):
+            obs.extend(self.env_obs)
+        # mesh: 含桌面(对夹爪抓取易误杀, 不推荐); staging_aware: 排除桌面(默认);
+        # executor_match: 含桌面 + 接触豁免, 与执行脚本 _placement_obstacles 逐项一致。
+        if mode in ("mesh", "staging_aware", "executor_match"):
+            excluded = self._contact_exclusion_set(current_pid, placed)
+            for pid in placed:
+                if pid in excluded:
+                    continue
+                if pid in self.goal_models:
+                    obs.append(self.goal_models[pid])
+            for pid in self.part_order:
+                if pid == current_pid or pid in placed:
+                    continue
+                if pid in self.staging_models:
+                    obs.append(self.staging_models[pid])
         return obs
 
     def validate_full_sequence_l3(
@@ -2457,51 +2786,37 @@ class WeightedInitialLayoutSearcher:
                         print(f"  [SKIP] step={step_idx} pid={pid:14s} already assembled at region={layout.assembly_region_id}")
                     continue
 
-                arm_tag = layout.arm_choice.get(pid, "lft")
-                transport = rgt_transport if arm_tag == "rgt" else lft_transport
+                # 用户指定跳过 L3 运动验证的零件(如 middle_plate)：
+                # 不做取放/RRT 验证，但仍视为已放置，计入后续零件的 step-aware 障碍。
+                if pid in getattr(self, "l3_skip_parts", set()):
+                    placed.add(pid)
+                    if verbose:
+                        print(f"  [SKIP-L3] step={step_idx} pid={pid:14s} L3 motion validation skipped (still counted as placed obstacle)")
+                    continue
 
-                sp = self.staging_models[pid].pos.copy()
-                sr = self.staging_models[pid].rotmat.copy()
-                gp, gr = self.world_poses[pid]
                 gc = self._grasp_collection(pid)
                 if gc is None or len(gc) == 0:
                     layout.l3_fail_reason = f"L3 step={step_idx} {pid}: grasp collection missing"
                     return False
 
-                obj_cm = make_collision_model(self.asm.model_path(pid), cdprim_type=self.cdprim_type)
-                obj_cm.pos = sp.copy()
-                obj_cm.rotmat = sr.copy()
-                obj_cm._sealp_part_id = pid
-                obj_cm._sealp_role = "l3_moving_object"
-
+                arm_tag = layout.arm_choice.get(pid, "lft")
+                sp = self.staging_models[pid].pos.copy()
+                sr = self.staging_models[pid].rotmat.copy()
+                gp, gr = self.world_poses[pid]
+                # 运输/RRT 用完整障碍; 抓取/落位 IK 用接触豁免障碍(口径同执行脚本)。
                 obs = self._l3_obstacles(pid, placed, mode=obstacle_mode)
-                try:
-                    res = transport.plan(
-                        obj_cmodel=obj_cm,
-                        grasp_collection=gc,
-                        goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
-                        obstacle_list=obs,
-                        approach_distance=APPROACH_DIST,
-                        depart_distance=PICK_DEPART_DIST,
-                        linear_granularity=LINEAR_GRANULARITY,
-                        **_transport_kwargs(),
-                    )
-                except Exception as e:
-                    layout.l3_fail_reason = (
-                        f"L3 step={step_idx} {pid} {arm_tag}: "
-                        f"exception {type(e).__name__}: {e!r}"
-                    )
-                    if verbose:
-                        print(f"  [FAIL] {layout.l3_fail_reason}")
-                    return False
+                placement_obs = self._l3_placement_obstacles(pid, placed, mode=obstacle_mode)
 
-                success = bool(getattr(res, "success", False))
-                if not success:
-                    err = getattr(res, "error_msg", "") or "no plan"
-                    layout.l3_fail_reason = f"L3 step={step_idx} {pid} {arm_tag}: {err}"
-                    if verbose:
-                        print(f"  [FAIL] {layout.l3_fail_reason}")
-                    return False
+                # 单个零件的运动验证走可重写钩子，子类可对特定零件改用换手等，
+                # 使 L3 验证方式与真实执行(动画)一致。
+                ok = self._l3_plan_part(
+                    layout=layout, step_idx=step_idx, pid=pid, arm_tag=arm_tag,
+                    sp=sp, sr=sr, gp=gp, gr=gr, gc=gc, obs=obs,
+                    lft_transport=lft_transport, rgt_transport=rgt_transport,
+                    verbose=verbose, placement_obs=placement_obs,
+                )
+                if not ok:
+                    return False  # fail_reason 已在钩子内写好
 
                 placed.add(pid)
                 if verbose:
@@ -2515,6 +2830,70 @@ class WeightedInitialLayoutSearcher:
 
         finally:
             _reset_robot_for_l3(self.robot)
+
+    def _l3_plan_part(self, layout, step_idx, pid, arm_tag, sp, sr, gp, gr, gc, obs,
+                      lft_transport, rgt_transport, verbose=True, placement_obs=None) -> bool:
+        """L3 单个零件的全流程运动验证钩子(默认: 单臂 TransportPrimitive)。
+
+        pick -> depart -> transport/RRT -> place approach -> place -> depart 全流程。
+        子类可重写, 对特定零件改用换手等其它运动方式, 使 L3 与真实执行一致。
+        返回 True/False; 失败时负责写 ``layout.l3_fail_reason``。
+
+        ``obs`` = 运输/RRT 完整障碍; ``placement_obs`` = 抓取/落位 IK 接触豁免障碍
+        (作为 grasp_obstacle_list 传入, 口径同执行脚本; 旧版 plan 无此参数时回退)。
+        """
+        transport = rgt_transport if arm_tag == "rgt" else lft_transport
+        if placement_obs is None:
+            placement_obs = obs
+
+        obj_cm = make_collision_model(self.asm.model_path(pid), cdprim_type=self.cdprim_type)
+        obj_cm.pos = np.asarray(sp, dtype=float).copy()
+        obj_cm.rotmat = np.asarray(sr, dtype=float).copy()
+        obj_cm._sealp_part_id = pid
+        obj_cm._sealp_role = "l3_moving_object"
+
+        try:
+            try:
+                res = transport.plan(
+                    obj_cmodel=obj_cm,
+                    grasp_collection=gc,
+                    goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                    obstacle_list=obs,
+                    grasp_obstacle_list=placement_obs,
+                    approach_distance=APPROACH_DIST,
+                    depart_distance=PICK_DEPART_DIST,
+                    linear_granularity=LINEAR_GRANULARITY,
+                    **_transport_kwargs(),
+                )
+            except TypeError:
+                # 兼容旧版 TransportPrimitive.plan(无 grasp_obstacle_list)
+                res = transport.plan(
+                    obj_cmodel=obj_cm,
+                    grasp_collection=gc,
+                    goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                    obstacle_list=obs,
+                    approach_distance=APPROACH_DIST,
+                    depart_distance=PICK_DEPART_DIST,
+                    linear_granularity=LINEAR_GRANULARITY,
+                    **_transport_kwargs(),
+                )
+        except Exception as e:
+            layout.l3_fail_reason = (
+                f"L3 step={step_idx} {pid} {arm_tag}: "
+                f"exception {type(e).__name__}: {e!r}"
+            )
+            if verbose:
+                print(f"  [FAIL] {layout.l3_fail_reason}")
+            return False
+
+        if not bool(getattr(res, "success", False)):
+            err = getattr(res, "error_msg", "") or "no plan"
+            layout.l3_fail_reason = f"L3 step={step_idx} {pid} {arm_tag}: {err}"
+            if verbose:
+                print(f"  [FAIL] {layout.l3_fail_reason}")
+            return False
+
+        return True
 
 
     # --------------------------------------------------------
@@ -2691,6 +3070,7 @@ class WeightedInitialLayoutSearcher:
                 "search_method": "weighted_random_on_work_table",
                 "l3_pass": bool(layout.l3_pass),
                 "l3_fail_reason": str(layout.l3_fail_reason),
+                "l3_skip_parts": sorted(list(self.l3_skip_parts)),
                 "score": float(layout.layout_score),
                 "score_components": {
                     "grasp": float(layout.grasp_score_norm),
@@ -2913,13 +3293,24 @@ def _parse_args():
     )
     parser.add_argument(
         "--planner-obstacle-mode",
-        choices=["mesh", "env_only", "none"],
+        choices=["mesh", "env_only", "none", "staging_aware", "executor_match"],
         default=DEFAULT_L2_OBSTACLE_MODE,
         help=(
-            "reason_common_gids 使用的障碍列表。mesh=使用 triangles/mesh 碰撞；"
-            "env_only=只检查桌子；none=不传障碍，避免 gripper 的 box/cdprim 误杀。"
+            "reason_common_gids 使用的障碍列表。mesh=全 triangles 碰撞(对堆叠装配会被桌面/"
+            "接触面误杀, 通常找不到解)；env_only=只检查桌子；none=不传障碍, 避免 gripper "
+            "的 box/cdprim 误杀；staging_aware=排除桌面误杀 + 保留已装件(按 parent/"
+            "接触表豁免插接面) + 新增其它 staging 件做障碍(默认)；executor_match="
+            "staging_aware + 工作台桌面, 与执行脚本 _placement_obstacles 逐项一致, "
+            "但贴桌零件的低位抓取会被薄桌盒误杀(不推荐)。"
         ),
     )
+
+    parser.add_argument("--disable-prefer-stl-upface", action="store_true",
+                        help="关闭'默认姿态保持'软偏好(细长/扁平件不再优先保持 STL 默认站立/平放)。")
+    parser.add_argument("--w-stl-upface", type=float, default=DEFAULT_W_STL_UPFACE,
+                        help="默认姿态保持惩罚权重(相对归一化 part_score, 默认 0.35)。越大越强制不翻倒。")
+    parser.add_argument("--stl-upface-min-thinness", type=float, default=DEFAULT_STL_UPFACE_MIN_THINNESS,
+                        help="只对 thinness>=此值(足够细长/扁平)的件生效, 默认 0.20。")
 
     parser.add_argument("--enable-l3", action="store_true", default=DEFAULT_ENABLE_L3,
                         help="开启严格 L3 全流程 TransportPrimitive/RRT 动态避障验证。默认关闭，只保存 L2。")
@@ -2927,8 +3318,16 @@ def _parse_args():
                         help="关闭 L3，只保存 L2 结果。调试时才建议使用。")
     parser.add_argument("--l3-top-k", type=int, default=DEFAULT_L3_TOP_K,
                         help="对 L2 得分最高的前 K 个 layout 做 L3 验证。")
-    parser.add_argument("--l3-obstacle-mode", choices=["mesh", "env_only", "none"], default=DEFAULT_L3_OBSTACLE_MODE,
-                        help="L3 全流程验证的障碍模式。严格验证建议 mesh。")
+    parser.add_argument("--l3-obstacle-mode", choices=["mesh", "env_only", "none", "staging_aware", "executor_match"],
+                        default=DEFAULT_L3_OBSTACLE_MODE,
+                        help="L3 全流程验证的障碍模式。推荐 staging_aware(默认): 排除桌面(避免夹爪被桌面"
+                             "mesh 误杀) + 接触豁免, 与 L2 --planner-obstacle-mode staging_aware 同口径; "
+                             "executor_match: staging_aware + 桌面, 与执行脚本逐项一致(贴桌零件易误杀); "
+                             "mesh 含桌面会过严。")
+    parser.add_argument("--l3-skip-parts", default=DEFAULT_L3_SKIP_PARTS,
+                        help="L3 全流程验证时跳过运动规划的零件，逗号分隔，默认 middle_plate。"
+                             "被跳过的零件仍计入后续零件的障碍(视为已放置)，只是不对它本身做 L3 验证。"
+                             "传空字符串则不跳过任何零件。")
     parser.add_argument("--allow-l2-fallback", action="store_true",
                         help="如果 L3 top-k 全失败，允许回退保存 L2 最高分。不加则 L3 失败时不保存。")
 
@@ -2957,7 +3356,9 @@ def main():
     print(f"grasp_dir = {args.grasp_dir}")
     print(f"output    = {os.path.join(output_dir, args.output_name + '.layout')}")
     print(f"L2 obs    = {args.planner_obstacle_mode}")
+    print(f"prefer STL upface = {not args.disable_prefer_stl_upface}, w={args.w_stl_upface:.2f}, min_thinness={args.stl_upface_min_thinness:.2f}  # 细长/扁平件优先保持默认站立/平放")
     print(f"L3 enable = {args.enable_l3 and not args.disable_l3}, L3 obs = {args.l3_obstacle_mode}, top_k = {args.l3_top_k}")
+    print(f"L3 skip parts = {args.l3_skip_parts or '(none)'}  # skipped parts are still counted as placed obstacles")
     print(f"assembly region search = {not args.disable_assembly_region_search}, grid={args.assembly_grid}, preassemble_first={not args.disable_preassemble_first}")
     print(f"assembly arm keepout   = False  # 3x3装配中心不按矩形距离过滤，只检查preassembled是否撞机械臂")
     print(f"staging arm keepout    = {not args.disable_staging_arm_keepout}, x_clearance={args.staging_arm_x_clearance:.3f}m, y_clearance={args.staging_arm_y_clearance:.3f}m")
@@ -3022,10 +3423,14 @@ def main():
         topdown_min_count=args.topdown_min_count,
         check_l2_pick_quick_motion=_use_l2_pick_quick,
         l2_pick_check_parts=_parse_part_order(args.l2_pick_check_parts) or [],
+        l3_skip_parts=_parse_part_order(args.l3_skip_parts) or [],
         l2_pick_check_lift_dist=args.l2_pick_check_lift_dist,
         l2_pick_check_directions=_parse_part_order(args.l2_pick_check_directions) or [],
         l2_pick_check_tilt=args.l2_pick_check_tilt,
         robot_home_clearance=args.robot_home_clearance,
+        prefer_stl_upface=not args.disable_prefer_stl_upface,
+        w_stl_upface=args.w_stl_upface,
+        stl_upface_min_thinness=args.stl_upface_min_thinness,
     )
 
     best = searcher.random_search(
@@ -3039,6 +3444,26 @@ def main():
 
     if best is not None:
         searcher.save_layout(best, output_dir)
+    else:
+        # 没找到通过验证的布局(常见: require_l3=True 且 L3 全失败)。
+        # 关键安全修复: 把旧的 .layout 重命名失效, 避免用户误用一个未通过验证的旧布局
+        # (那正是"能抓但放不下"的根源)。
+        out_path = os.path.join(output_dir, f"{searcher.output_name}.layout")
+        if os.path.isfile(out_path):
+            stale_path = out_path + ".stale_invalid"
+            try:
+                if os.path.exists(stale_path):
+                    os.remove(stale_path)
+                os.replace(out_path, stale_path)
+                print(
+                    f"\n[SAVE] 未找到通过验证的布局; 已把旧的\n  {out_path}\n"
+                    f"重命名为\n  {stale_path}\n"
+                    "以免误用未验证布局。请放宽参数/换 seed 重搜, 或加 --allow-l2-fallback。"
+                )
+            except Exception as e:
+                print(f"[SAVE] WARN: 旧 layout 失效失败: {type(e).__name__}: {e!r}")
+        else:
+            print("\n[SAVE] 未找到通过验证的布局, 且无旧 layout 文件, 不写出。")
 
 
 if __name__ == "__main__":
