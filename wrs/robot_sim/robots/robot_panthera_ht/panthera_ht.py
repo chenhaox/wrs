@@ -93,17 +93,17 @@ if __name__ == '__main__':
     mgm.gen_frame().attach_to(base)
 
     robot = PantheraHTSglArm(enable_cc=True)
-    test_conf = np.array([0,0,0,0,0,0])
-    # robot.change_jaw_width(0)
-    # print("Random Joint:", joint)
-    #
-    # pos, rot = robot.fk(joint)
-    # print("TCP Pos:", pos)
-    # print("TCP Rot:\n", rot)
-    # gm.gen_sphere(pos=pos, radius=0.02, rgb=np.array([1, 0, 0])).attach_to(base)
-    # joint_ik = robot.ik(tgt_pos=pos, tgt_rotmat=rot, seed_jnt_values=joint)
-    # print("IK Solved Joint:", joint_ik)
+    test_conf = robot.rand_conf()
+    robot.change_jaw_width(0.05)
+    print("Random Joint:", test_conf)
 
-    robot.goto_given_conf(np.radians(test_conf))
+    pos, rot = robot.fk(test_conf)
+    print("TCP Pos:", pos)
+    print("TCP Rot:\n", rot)
+    gm.gen_sphere(pos=pos, radius=0.02, rgb=np.array([1, 0, 0])).attach_to(base)
+    joint_ik = robot.ik(tgt_pos=pos, tgt_rotmat=rot, seed_jnt_values=test_conf)
+    print("IK Solved Joint:", joint_ik)
+
+    robot.goto_given_conf(joint_ik)
     robot.gen_meshmodel(toggle_tcp_frame=False, toggle_jnt_frames=False).attach_to(base)
     base.run()

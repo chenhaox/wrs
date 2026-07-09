@@ -1,0 +1,6 @@
+epoch 001 | loss=1.1169 cls=1.1096 score=0.0073 xy=0.0000 st=0.0000 | roc=0.459 pr=0.379 rec@10=0.077 prec@10=0.200 topkAvg=0.218 sp=-0.136 enr=0.485 | comp=0.2047 [composite=0.2047]
+epoch 002 | loss=1.0591 cls=1.0529 score=0.0062 xy=0.0000 st=0.0000 | roc=0.541 pr=0.429 rec@10=0.154 prec@10=0.400 topkAvg=0.557 sp=0.390 enr=0.969 | comp=0.3683 [composite=0.3683]
+epoch 003 | loss=1.0261 cls=1.0207 score=0.0055 xy=0.0000 st=0.0000 | roc=0.523 pr=0.426 rec@10=0.192 prec@10=0.500 topkAvg=0.455 sp=0.402 enr=1.212 | comp=0.3592 [composite=0.3592]
+epoch 004 | loss=1.0977 cls=1.0929 score=0.0048 xy=0.0000 st=0.0000 | roc=0.530 pr=0.504 rec@10=0.154 prec@10=0.400 topkAvg=0.455 sp=0.379 enr=0.969 | comp=0.3766 [composite=0.3766]
+epoch 005 | loss=1.0585 cls=1.0532 score=0.0053 xy=0.0000 st=0.0000 | roc=0.521 pr=0.421 rec@10=0.154 prec@10=0.400 topkAvg=0.455 sp=0.394 enr=0.969 | comp=0.3451 [composite=0.3451]
+epoch 006 | loss=1.0265 cls=1.0210 score=0.0055 xy=0.0000 st=0.0000 | roc=0.557 pr=0.476 rec@10=0.192 prec@10=0.500 topkAvg=0.455 sp=0.393 enr=1.212 | comp=0.3785 [composite=0.3785]

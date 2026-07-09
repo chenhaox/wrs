@@ -1,34 +1,34 @@
 {
-  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_optimal_initial.layout",
-  "score": 0.6221589303442421,
+  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_neural_grid_smoke.layout",
+  "score": 0.5602331512774853,
   "xy": {
-    "base_plate": [
-      0.3725000035762787,
-      -0.35000000000000003
-    ],
     "post_br": [
-      0.14495735614688515,
-      -0.3051831088194268
+      0.20417283475399017,
+      0.14799166642129422
     ],
     "post_fr": [
-      0.3693220131022653,
-      -0.4543408341988053
+      0.032008333578705805,
+      -0.8479916664212941
     ],
     "post_bl": [
-      0.3839042796970962,
-      0.02872135622701262
+      0.42799166642129427,
+      0.17799166642129421
     ],
     "post_fl": [
-      0.3486569661569795,
-      -0.6644312791801289
+      0.0020083335787058065,
+      0.14799166642129422
     ],
     "middle_plate": [
-      0.2958277196481963,
-      -0.7738992118672111
+      0.3574999967217446,
+      -0.1516757756471634
     ],
     "top_cross": [
-      0.1827828546983902,
-      0.10911977845980451
+      0.20596155405044556,
+      -0.7846095561981201
+    ],
+    "base_plate": [
+      0.23000000000000004,
+      -0.35000000000000003
     ]
   },
   "z_offset": {
@@ -37,7 +37,7 @@
     "post_fr": 0.003,
     "post_bl": 0.003,
     "post_fl": 0.003,
-    "middle_plate": 0.08550000327825547,
+    "middle_plate": 0.06299999865889548,
     "top_cross": 0.003
   },
   "pose_tag": {
@@ -55,16 +55,16 @@
     "post_fr": "identity",
     "post_bl": "identity",
     "post_fl": "identity",
-    "middle_plate": "fs_03",
+    "middle_plate": "fs_00",
     "top_cross": "identity"
   },
-  "assembly_region_id": "r1_c2",
+  "assembly_region_id": "r1_c1",
   "assembly_region_rc": [
     1,
-    2
+    1
   ],
   "assembly_station_pos": [
-    0.3725000035762787,
+    0.23000000000000004,
     -0.35000000000000003,
     0.0
   ],
@@ -87,28 +87,28 @@
   },
   "grasp_counts": {
     "base_plate": 20,
-    "post_br": 37,
-    "post_fr": 41,
-    "post_bl": 40,
-    "post_fl": 45,
-    "middle_plate": 82,
-    "top_cross": 37
+    "post_br": 50,
+    "post_fr": 49,
+    "post_bl": 29,
+    "post_fl": 29,
+    "middle_plate": 92,
+    "top_cross": 50
   },
   "arm_choice": {
     "base_plate": "preassembled",
-    "post_br": "rgt",
+    "post_br": "lft",
     "post_fr": "rgt",
     "post_bl": "lft",
-    "post_fl": "rgt",
-    "middle_plate": "rgt",
-    "top_cross": "lft"
+    "post_fl": "lft",
+    "middle_plate": "lft",
+    "top_cross": "rgt"
   },
   "score_components": {
-    "grasp": 0.8503815995687942,
-    "manip": 0.320754643920644,
-    "dist": 0.6038812953432412,
+    "grasp": 0.8549977851772524,
+    "manip": 0.20378898817648594,
+    "dist": 0.4822664253636987,
     "rot": 0.7209434519836979,
-    "spatial_y_distribution": 1.0
+    "spatial_y_distribution": 0.825
   },
   "spatial_constraints": {
     "min_staging_mesh_clearance": 0.01,
@@ -233,18 +233,18 @@
     ],
     "middle_plate": [
       [
+        0.7071067811865474,
         0.0,
-        0.7071067811865475,
-        0.7071067811865475
+        0.7071067811865474
       ],
       [
-        0.0,
         0.7071067811865475,
+        0.0,
         -0.7071067811865475
       ],
       [
-        -1.0,
         0.0,
+        0.9999999999999999,
         0.0
       ]
     ],
