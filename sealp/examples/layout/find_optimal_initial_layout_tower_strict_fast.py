@@ -1,106 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Fast Strict Tower Initial Layout Search — PyCharm Runnable
-==========================================================
+"""Tower 初始布局搜索加速实现。
 
-这是 ``find_optimal_initial_layout_tower_strict.py`` 的加速版。
-**约束、过滤规则、打分公式与输出格式与原版完全一致**，本文件只重写实现细节。
-
-加速思路（每一项都已实测在循环里成本最高的位置）:
-
-1. 几何缓存:
-   - 对每个 (part, RotCandidate) 预先算好 ``V @ R^T`` 与对应的 local AABB。
-   - 评估时只做 ``Vrot + pos`` (O(N) 向量加法) 与 ``local_min + pos`` (O(1))。
-   - 原版每次 cand 候选都要重新做 ``V.dot(R.T)``、``min``、``max``，约 2/3 的 numpy 调用被砍掉。
-
-2. AABB 早判:
-   - ``_pairwise_collision`` 在调 mesh-mesh ``is_mcdwith`` 前先做 O(1) AABB overlap，
-     绝大多数 cand 候选下零件分散，AABB 不重叠就直接判通过。
-   - ``_mesh_clearance_reason`` 在调 vertex distance 矩阵前也走 AABB pre-screen。
-   - ``sample_collision_free_xy`` 同样先 AABB，再调昂贵的 ``is_mcdwith``。
-
-3. ``reason_common_gids`` 逐位姿 IK 可行性缓存 (本版本最大提速点):
-   - 这是 evaluate_layout 真正的瓶颈:对 goal_pose_list 里每个位姿都遍历全部
-     grasp 做 IK + 双碰撞检查。原版 reason_common_gids([(sp,sr),(gp,gr)], obs)
-     的结果 = {staging 可行} ∩ {goal 可行}，两位姿可行性互相独立。
-   - 关键事实:在某零件的 cand 循环里 goal 位姿 (gp,gr) 与 planner_obs 不变
-     (``_step_obstacles`` 排除了当前搬运件)，只有 staging 随 cand 变。原版每个
-     cand 都把 goal 侧 IK 重算一遍，纯重复劳动。
-   - 做法:monkeypatch reason_common_gids 为"逐位姿求全量可行集 + 取交集"，
-     每个位姿的可行集按 (robot, grasp_collection, pos, rotmat, 障碍 id 集) memoize，
-     每评估一个新 layout 前清空缓存。返回 gid 集合与原实现完全一致。
-   - 收益:goal 侧 IK 由 (cand 数 × arm 数) 次降到每 arm 1 次；
-     ``_l2_pick_quick_check_gids`` 里 pick 位姿==sp 也命中缓存。
-   - 结束时会打印 cache 命中率 + 省下的 IK 轮数，组会可直接展示。
-
-4. ``MAX_GRASPS_PER_POSE`` —— 每个位姿参与 IK 的 grasp 数封顶 (第二大提速点):
-   - 瓶颈是 grasp 集合巨大(四根 post 各 1108 个)，每个 cand × arm × staging 位姿
-     都把全部 grasp 跑一遍 IK，实测累计 ~170 万次 per-grasp IK。
-   - 打分里 grasp 项(_hill, target=20，且 part_score 取 min(n,60))在 n≈60~80 就饱和，
-     一个 post 找到 80 个可行 grasp 和 180 个得分几乎一样，多出的 IK 纯浪费。
-   - 做法:对每个 grasp 集合做确定性均匀抽样(np.linspace 等距取 <= MAX 个)，
-     **所有位姿共用同一子集**，所以两位姿可行集的交集在子集上仍然精确、所有硬约束
-     一个不少；等价于"用更小的 grasp pickle 跑原算法"。
-   - 默认 400(post 1108->400 约 2.8x 更少 IK)；设 0 关闭(逐字节等同原脚本)。
-
-5. ``_robot_home_collision_reason`` 省掉 backup/restore(但保留 goto HOME):
-   - 父类每次 ``backup -> goto HOME -> check -> restore``。
-   - 本版省掉 backup/restore(每臂各 1，共 4 次)，但 **仍显式 goto HOME** 再检查:
-     因为 reason_common_gids 会在 cand 循环里把手臂带离 HOME 且不还原，
-     若不重新 goto HOME 会在错误位姿下误判碰撞(这点之前版本是错的，已修正)。
-   - 最终机器人状态由 evaluate_layout 外层的一次 backup/restore 兜底。
-
-6. 顶点最小距离:
-   - 当 scipy 可用，``_vertex_distance_between_world_vertices`` 走 ``cKDTree`` (O((N+M) log N))，
-     代替原版 600×600 = 360000 元素的距离矩阵 (O(NM))。
-   - scipy 缺失时自动回退原 broadcasting 实现。
-
-7. layout 级早死亡:
-   - ``random_search`` 内先做 ``_order_x_constraint_reason`` 这种 layout-only 廉价检查，
-     避免 evaluate_layout 内还要先初始化所有 staging cm.pos/rotmat 才能拒掉。
-
-**完全保留**:
-- 3x3 装配区采样、装配区 preassembled 碰撞过滤；
-- staging arm keepout / 桌面边界 / goal-y side biased sampling；
-- flatsurface 稳定姿态 + 90° fallback + identity 优先排序；
-- upright 硬约束、mesh-clearance 硬约束；
-- robot home 穿模 + AABB clearance 检查；
-- L2 reason_common_gids + L2 pre/pick/post quick check；
-- TransportPrimitive 端点 manipulability 评估；
-- L3 全流程动态避障验证、回退策略；
-- 输出 ``tower_optimal_initial.layout`` / ``tower_optimal_initial_debug.json`` 格式不变。
-
-**默认改动 (仅缺省值，可被命令行覆盖)**:
-- ``order-x`` 硬约束默认关闭。
-  之前 part_order 改成 [post_br, post_fr, post_bl, post_fl, ...] 之后，
-  纯随机采样几乎不可能满足 order-x，n_samples=10 时基本 10/10 早死亡。
-  对应用户原命令一直都写着 ``--disable-order-x-constraint``，
-  这里直接默认关掉，省去每次手动加。
-  如需重新打开，把 ``DEFAULT_DISABLE_ORDER_X = False`` 即可。
-
-PyCharm 右键运行:
-    与原脚本一样，直接右键运行即可。
-
-命令行:
-    python -m sealp.examples.layout.find_optimal_initial_layout_tower_strict_pycharm_fast \
-        --n-samples 8 --planner-obstacle-mode none --assembly-grid 3
-
-性能对比 (组会用):
-    跑两次同一脚本，唯一区别就是有没有 ``--baseline``，
-    结束时会分别打印同一格式的 profile 表格供并排对比:
-
-    # FAST  —— 走 FastWeightedInitialLayoutSearcher (默认)
-    python -m sealp.examples.layout.find_optimal_initial_layout_tower_strict_pycharm_fast \
-        --n-samples 30 --planner-obstacle-mode none --assembly-grid 3
-
-    # BASELINE  —— 同一份脚本里退化回 fol.WeightedInitialLayoutSearcher
-    python -m sealp.examples.layout.find_optimal_initial_layout_tower_strict_pycharm_fast \
-        --baseline --n-samples 30 --planner-obstacle-mode none --assembly-grid 3
-
-额外 CLI 开关:
-    --baseline     退化为原脚本 Searcher，便于 A/B 对比；不影响其它参数。
-    --no-profile   关闭计时和报告，跟"裸跑"完全一样。
-"""
+复用基础搜索器的约束、评分和输出，仅增加几何缓存、AABB 预筛、IK 结果缓存和可选的多 seed 搜索。"""
 from __future__ import annotations
 
 import functools
@@ -136,56 +38,18 @@ except Exception:
 
 
 # 默认行为开关:
-#   True  -> 启动时自动注入 ``--disable-order-x-constraint``，与用户惯用命令一致。
-#   False -> 行为完全等同原脚本默认值(开启 order-x 硬约束)。
-# 已经在命令行里显式写过 ``--disable-order-x-constraint`` 的不会被重复注入。
 DEFAULT_DISABLE_ORDER_X = True
 
 
-# ------------------------------------------------------------
+# ============================================================
 # 每个位姿参与 IK 的 grasp 数量上限 (本版本第二大提速点)
-# ------------------------------------------------------------
-#
-# 为什么需要它:
-#   profile 显示 reason_common_gids 占了 ~99% 时间, 累计跑了 ~170 万次 per-grasp IK。
-#   根源是 grasp 集合巨大(四根 post 各 1108 个), 每个旋转候选 × 每只手臂 × staging
-#   位姿都要把全部 grasp 跑一遍 IK; staging 位姿逐 cand 不同, 无法缓存, 是硬成本。
-#
-# 为什么几乎无损:
-#   打分里 grasp 项用 _hill(min(n,60), target=20) / _hill(n_min, 8) / _hill(n_mean, 20),
-#   这些函数在 n≈60~80 就基本饱和。一个 post 找到 80 个可行 grasp 和找到 180 个,
-#   得分几乎一样 —— 多出来的 IK 纯属浪费。
-#
-# 做法:
-#   对每个 grasp 集合做一次确定性均匀抽样(np.linspace 取等距下标), 取出 <= MAX 个,
-#   **所有位姿都用同一个子集**, 因此两位姿可行集的交集在该子集上仍然精确,
-#   所有硬约束(IK 可行性、机器人/夹爪碰撞、keepout 等)一个不少, 只是 grasp 样本数变小。
-#   等价于"用一份更小的 grasp pickle 跑原算法"。
-#
-# 取舍:
-#   - 0 / None  -> 不抽样, 行为与原脚本逐字节一致(最慢)。
-#   - 越小越快, grasp 计数整体等比缩小; 因为分数饱和, 排序基本不变。
-#   - 默认 400: post 1108->400(~2.8x 更少 IK), top_cross 725->400, middle/base 不到 400 不动。
-#     想更快可调到 250~300; 想更接近原始可调到 600 或设 0。
+# ============================================================
 MAX_GRASPS_PER_POSE = 350
 
 
 # ============================================================
 # 权威最优布局管线 (explore -> 收敛 -> 精确重打分 -> 局部打磨)
 # ============================================================
-#
-# 目标:不再是"20 次随机里的最好", 而是给出一个可信的"这就是(近)最优位置"。
-# 关键认识:
-#   - 探索阶段用小 cap(MAX_GRASPS_PER_POSE)快速广撒网, 分数只用于排序, 不当真。
-#   - 打分里 grasp 项 _hill 在可行 grasp≈60~80 时饱和, 小 cap 会让计数偏低 -> 分数失真,
-#     所以"权威得分"必须在 cap=0(全量 grasp)下、对少数候选重算一次。
-#   - 随机点几乎不会正好落在最优, 故对最佳候选再做一次局部爬山打磨。
-#   - 收敛证据:分批探索, 用近似分判断 top-1 是否稳定, 稳定即停。
-#
-# 成本提醒:cap=0 的单次评估很贵(~数百秒), 所以精确重打分只在最后对 top-K 做一次,
-#   打磨在近似 cap 下进行、最后只对打磨结果精确重算一次。
-#
-# 全部开关 / 预算都在这里, 想恢复"纯原始单批随机"把 AUTH_ENABLE 设 False 即可。
 AUTH_ENABLE = True            # 总开关:True 走权威管线, False 退回父类单批 random_search
 AUTH_MAX_BATCHES = 3          # 探索分几批(每批 = 命令行 --n-samples 个样本); 平衡预算默认 3
 AUTH_PATIENCE = 2             # 近似 top-1 连续多少批不变就判定收敛、提前停
@@ -197,16 +61,9 @@ AUTH_POLISH_CAP = 400         # 打磨阶段用的近似 cap(打磨完再精确�
 AUTH_POLISH_STEP0 = 0.04      # 打磨初始 xy 扰动标准差(米), 失败/不改进时按 0.85 衰减
 
 # ---- 可执行性硬保证(避免找到"算法觉得行、实际抓不了"的布局) ----
-# 问题背景:--planner-obstacle-mode none 时, L2 抓取检查把所有障碍都丢掉,
-# 于是看不到 "某零件 staging 点贴着前面已装零件的最终装配位置" 这种情况
-# (例如 top_cross 离 post_fr 装好后的位置太近 -> 执行时夹爪撞 post_fr, 无公共抓取)。
-# 已装零件在执行时是实打实摆在桌上的实体, 所以无论 obstacle-mode 是什么,
-# 它们(weighted_goal)都必须始终作为障碍参与抓取检查。
 ALWAYS_KEEP_ASSEMBLED_OBSTACLES = True   # True=已装件最终位姿永远当障碍(推荐, 保证可执行)
 
 # ---- 多 seed 复现(最强收敛佐证) ----
-# 对每个 seed 独立跑完整权威管线, 再做跨 seed 一致性判定。
-# 全部 seed 收敛到同一装配区 + 分数 CV<5% + xy 漂移<8cm => STRONG(与随机种子无关的近最优)。
 AUTH_SEEDS: List[int] = [0, 1, 2]   # 默认 3 个 seed; 设为 [] 则用命令行 --seed 单跑
 _AUTH_SEEDS_OVERRIDE: Optional[List[int]] = None   # 由 CLI --seeds 填充, 优先级最高
 
@@ -352,31 +209,6 @@ def _print_profile_report() -> None:
 # ============================================================
 # 逐位姿 IK 可行性缓存 (针对真正的瓶颈 reason_common_gids)
 # ============================================================
-#
-# 背景:
-#   evaluate_layout 里真正最贵的是 PickPlacePlanner.reason_common_gids,
-#   它对 goal_pose_list 里的每个位姿都遍历全部 grasp 做 IK + 双重碰撞检查。
-#   原版调用形如 reason_common_gids([(sp,sr),(gp,gr)], obs),
-#   结果 = {在 staging 位姿可行的 gid} ∩ {在 goal 位姿可行的 gid}。
-#   两个位姿的可行性彼此独立,所以等价于"逐位姿各自求全量可行集再取交集"。
-#
-# 关键事实:
-#   在某个零件的 cand 循环里, goal 位姿 (gp,gr) 与 planner_obs 完全不变
-#   (_step_obstacles 排除了当前搬运件), 只有 staging 位姿随 cand 改变。
-#   原版每个 cand 都把 goal 侧 IK 重算一遍 -> 纯重复劳动。
-#   另外 _l2_pick_quick_check_gids 里的 pick 位姿就是 sp, 与主调用重合。
-#
-# 做法:
-#   monkeypatch reason_common_gids, 改成"逐位姿可行集 + 取交集",
-#   每个位姿的全量可行集按 (robot, grasp_collection, pos, rotmat, 障碍物位姿快照)
-#   做 memoize。语义与原实现得到的 gid 集合完全一致(交集可交换、逐位姿独立)。
-#   障碍物 key 带 pos/rotmat 字节, 任一障碍物移动即失效, 因此连 L3
-#   (障碍物会在步骤间移动) 也安全; 每评估一个新 layout 再清空一次以控内存。
-#
-# 收益:
-#   goal 侧 IK: 每个零件由 (cand 数 × arm 数) 次 -> 每 arm 1 次。
-#   staging 侧: 主调用与 quick-check 的 pick 位姿命中缓存。
-#   完全不改变任何约束、打分、最终结果。
 
 _POSE_FEASIBLE_CACHE: Dict[Any, List[int]] = {}
 _POSE_CACHE_STATS: Dict[str, int] = {"hit": 0, "miss": 0, "ik_evals": 0}
@@ -387,12 +219,7 @@ _GC_SUBSET_CACHE: Dict[int, List[int]] = {}
 
 
 def _gc_subset_gids(grasp_collection) -> List[int]:
-    """对一个 grasp 集合做确定性均匀抽样，返回 <= MAX_GRASPS_PER_POSE 个 gid(升序)。
-
-    用 np.linspace 取等距下标，保证抽样在整个 grasp 集合上均匀铺开、可复现;
-    所有位姿共用同一子集 -> 两位姿可行集的交集在该子集上仍然精确。
-    MAX_GRASPS_PER_POSE 为 0/None 或集合本身不超过上限时，返回全部 gid。
-    """
+    """对一个 grasp 集合做确定性均匀抽样，返回 <= MAX_GRASPS_PER_POSE 个 gid(升序)。"""
     n = len(grasp_collection)
     cap = MAX_GRASPS_PER_POSE
     if not cap or n <= cap:
@@ -407,11 +234,7 @@ def _gc_subset_gids(grasp_collection) -> List[int]:
 
 
 def _pose_cache_reset_for_layout() -> None:
-    """每评估一个新 layout 前清空逐位姿缓存(主要为控内存)。
-
-    正确性其实已由 key 里的障碍物位姿快照保证(障碍物挪动即失效);
-    这里清空只是避免缓存随 layout 数无限增长。
-    """
+    """每评估一个新 layout 前清空逐位姿缓存(主要为控内存)。"""
     _POSE_FEASIBLE_CACHE.clear()
 
 
@@ -423,11 +246,7 @@ def _pose_cache_reset_stats() -> None:
 
 
 def _obstacle_pose_key(obs: List) -> Tuple:
-    """把障碍物列表压成 (id, pos字节, rotmat字节) 的可哈希 key。
-
-    带上位姿快照,保证障碍物移动后缓存自动失效(L3 复用同一对象但位姿会变)。
-    无法取位姿的障碍物退回只用 id。整体按 id 排序,顺序无关。
-    """
+    """把障碍物列表压成 (id, pos字节, rotmat字节) 的可哈希 key。"""
     items = []
     for o in obs:
         oid = id(o)
@@ -442,10 +261,7 @@ def _obstacle_pose_key(obs: List) -> Tuple:
 
 
 def _pose_feasible_gids(robot, grasp_collection, gid_iter, pos, rotmat, obstacle_list):
-    """复刻 WRS reason_common_gids 的单位姿过滤逻辑(逐 grasp,顺序、判据完全一致)。
-
-    返回在该位姿下 IK 可行且机器人/夹爪都不碰撞的 gid 升序列表。
-    """
+    """复刻 WRS reason_common_gids 的单位姿过滤逻辑(逐 grasp,顺序、判据完全一致)。"""
     out: List[int] = []
     ee = robot.end_effector
     for gid in gid_iter:
@@ -467,11 +283,7 @@ def _pose_feasible_gids(robot, grasp_collection, gid_iter, pos, rotmat, obstacle
 
 def _cached_reason_common_gids(self, grasp_collection, goal_pose_list,
                                obstacle_list=None, toggle_dbg=False):
-    """reason_common_gids 的缓存版:逐位姿求可行集再取交集。
-
-    与原实现返回的 gid 集合完全相同(升序);区别只是 goal/重复位姿走 memoize。
-    toggle_dbg 时直接回退原实现,保证调试可视化行为不变。
-    """
+    """reason_common_gids 的缓存版:逐位姿求可行集再取交集。"""
     if toggle_dbg and _ORIG_REASON_COMMON_GIDS is not None:
         return _ORIG_REASON_COMMON_GIDS(
             self, grasp_collection, goal_pose_list,
@@ -481,9 +293,6 @@ def _cached_reason_common_gids(self, grasp_collection, goal_pose_list,
     robot = self.robot
     obs = list(obstacle_list) if obstacle_list else []
     # obs_key 必须包含障碍物的"位姿快照"，不能只用 id:
-    # 在 L3 全流程验证里，staging/goal 模型对象会被复用但位姿在步骤间改变，
-    # 只凭 id 会命中过期几何。带上 pos/rotmat 字节，任一障碍物挪动 key 即失效;
-    # 而 L2 单零件 cand 循环里这些障碍物根本不动，照样稳定命中。
     obs_key = _obstacle_pose_key(obs)
     gc_key = id(grasp_collection)
     rb_key = id(robot)
@@ -567,16 +376,11 @@ def _print_ik_cache_report() -> None:
 
 
 class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
-    """加速版搜索器。
+    """加速版搜索器。"""
 
-    与父类相比，只重写若干 hotspot 方法。所有约束/打分语义保持等价。
-
-    具体做法见模块开头 docstring。
-    """
-
-    # --------------------------------------------------------
+    # ============================================================
     # 初始化
-    # --------------------------------------------------------
+    # ============================================================
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -586,29 +390,14 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         self._cand_geom_cache: Dict[Tuple[str, int], Dict[str, np.ndarray]] = {}
 
         # 当前每个 pid 在世界坐标系下的几何 cache:
-        # 由 _apply_staging_pose / _apply_first_part_as_assembled 维护。
-        # value = {"rotated_verts": ndarray, "local_min": (3,), "local_max": (3,), "pos": (3,)}
         self._current_world_cache: Dict[str, Dict[str, np.ndarray]] = {}
 
-    # --------------------------------------------------------
+    # ============================================================
     # 可执行性硬保证:已装件最终位姿永远是障碍
-    # --------------------------------------------------------
+    # ============================================================
 
     def _planner_obstacles(self, obs: List, current_pid=None, placed=None) -> List:
-        """覆写父类:无论 planner_obstacle_mode 是什么, 已装零件(weighted_goal)
-        的最终装配位姿都必须保留为抓取检查的障碍。
-
-        父类逻辑:
-            none          -> []                          (把 weighted_goal 也丢了, 危险!)
-            env_only      -> 只留 environment_obstacle    (同样丢了 weighted_goal)
-            mesh          -> 全部保留
-            staging_aware -> 排桌面 + 已装件(按接触豁免) + 其它 staging (父类已处理好)
-
-        对 none/env_only:在父类结果之上, 强制把 weighted_goal(已装件最终位姿)补回去,
-        避免放出 "staging 点贴着已装件" 这种执行时必然抓不到的布局。
-        对 mesh/staging_aware:父类已经正确处理 weighted_goal(staging_aware 还做了
-        parent/接触面豁免), 这里绝不能再无脑补回去, 否则会把豁免件又加回来。
-        """
+        """覆写父类:无论 planner_obstacle_mode 是什么, 已装零件(weighted_goal)"""
         base = super()._planner_obstacles(obs, current_pid=current_pid, placed=placed)
         if not ALWAYS_KEEP_ASSEMBLED_OBSTACLES:
             return base
@@ -622,9 +411,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                 seen.add(id(o))
         return out
 
-    # --------------------------------------------------------
+    # ============================================================
     # 几何 cache 辅助
-    # --------------------------------------------------------
+    # ============================================================
 
     def _ensure_cand_geom_cache(
         self, pid: str, cand: RotCandidate
@@ -671,10 +460,7 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         }
 
     def _update_world_cache_from_cm(self, pid: str) -> None:
-        """staging_models[pid] 的 pos/rotmat 被外部直接改时刷新缓存。
-
-        典型场景:``_apply_first_part_as_assembled`` 把 first part 拉到 goal pose。
-        """
+        """staging_models[pid] 的 pos/rotmat 被外部直接改时刷新缓存。"""
         cm = self.staging_models.get(pid)
         if cm is None:
             self._current_world_cache.pop(pid, None)
@@ -728,9 +514,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         sep = np.maximum(0.0, np.maximum(bmin - amax, amin - bmax))
         return float(np.linalg.norm(sep))
 
-    # --------------------------------------------------------
+    # ============================================================
     # 覆盖父类 pose 写入入口
-    # --------------------------------------------------------
+    # ============================================================
 
     def _apply_staging_pose(self, pid: str, xy: np.ndarray, cand: RotCandidate) -> None:
         super()._apply_staging_pose(pid, xy, cand)
@@ -757,9 +543,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         if first_pid is not None:
             self._current_world_cache.pop(first_pid, None)
 
-    # --------------------------------------------------------
+    # ============================================================
     # _world_vertices_for_staging 走缓存
-    # --------------------------------------------------------
+    # ============================================================
 
     def _world_vertices_for_staging(self, pid: str) -> Optional[np.ndarray]:
         entry = self._current_world_cache.get(pid)
@@ -770,9 +556,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                 pass
         return super()._world_vertices_for_staging(pid)
 
-    # --------------------------------------------------------
+    # ============================================================
     # AABB 预筛的 _pairwise_collision
-    # --------------------------------------------------------
+    # ============================================================
 
     def _pairwise_collision(
         self, active_pids: Optional[List[str]] = None
@@ -795,9 +581,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                     return f"{a} vs {b}"
         return None
 
-    # --------------------------------------------------------
+    # ============================================================
     # AABB 预筛 + KDTree 加速的 _mesh_clearance_reason
-    # --------------------------------------------------------
+    # ============================================================
 
     def _vertex_distance_between_world_vertices(
         self, va: np.ndarray, vb: np.ndarray
@@ -858,24 +644,14 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                     return f"{a} vs {b}: clearance={vtx_d:.4f}m < required {min_clear:.4f}m"
         return None
 
-    # --------------------------------------------------------
+    # ============================================================
     # _robot_home_collision_reason 去 backup/restore
-    # --------------------------------------------------------
+    # ============================================================
 
     def _robot_home_collision_reason(
         self, active_pids: Optional[List[str]] = None
     ) -> Optional[str]:
-        """与父类结果完全等价，只是省掉 backup_state / restore_state。
-
-        正确性要点:父类每次都 ``backup -> goto HOME -> check -> restore``，
-        关键在于检查必须发生在 **HOME 位姿** 下。本类外层 evaluate_layout 虽然
-        起始把双臂置于 HOME，但 ``reason_common_gids`` 在 cand 循环里会反复
-        ``goto_given_conf`` 且 **不还原**，导致后续 cand 进入本函数时手臂已不在 HOME。
-        因此这里仍必须显式 ``goto HOME`` 再检查，否则会在错误位姿下误判碰撞。
-
-        相比父类省掉的是 backup/restore(每臂各 1 次，共 4 次)，
-        最终状态由外层 evaluate_layout 的 backup/restore 统一兜底。
-        """
+        """与父类结果完全等价，只是省掉 backup_state / restore_state。"""
         if not self.check_robot_home_collision:
             return None
 
@@ -914,9 +690,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
 
         return None
 
-    # --------------------------------------------------------
+    # ============================================================
     # evaluate_layout 外层包一次 backup/restore + layout 级早死亡
-    # --------------------------------------------------------
+    # ============================================================
 
     def evaluate_layout(self, layout: LayoutCandidate) -> bool:
         # 新 layout -> 障碍布置变了，逐位姿 IK 缓存必须清空(同一 layout 内才安全复用)。
@@ -950,19 +726,16 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                     except Exception:
                         pass
 
-    # --------------------------------------------------------
+    # ============================================================
     # sample_collision_free_xy 加 AABB 预筛
-    # --------------------------------------------------------
+    # ============================================================
 
     def sample_collision_free_xy(
         self,
         rng: np.random.Generator,
         max_attempts_per_part: int = 150,
     ) -> Optional[Dict[str, np.ndarray]]:
-        """与父类语义一致:返回 layout 字典或 None。
-
-        在 ``is_mcdwith`` 之前用 cached AABB 早判，过滤明显不重叠的 placed 对子。
-        """
+        """与父类语义一致:返回 layout 字典或 None。"""
         xy: Dict[str, np.ndarray] = {}
         placed: List[str] = []
         first_pid = self._first_part_id() if self.preassemble_first_part else None
@@ -1046,9 +819,9 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
 
         return {pid: xy[pid] for pid in self.part_order if pid in xy}
 
-    # --------------------------------------------------------
+    # ============================================================
     # 权威最优布局管线
-    # --------------------------------------------------------
+    # ============================================================
 
     def _auth_fingerprint(self, cand: Optional[LayoutCandidate]):
         """把一个布局压成可比较的指纹，用于判断 top-1 是否在批次间稳定。"""
@@ -1063,12 +836,7 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         return (str(cand.assembly_region_id), tuple(items))
 
     def _auth_reeval_with_cap(self, src: LayoutCandidate, cap) -> Optional[LayoutCandidate]:
-        """在指定 grasp cap 下，对 src 布局(相同装配区 + 相同 xy)重新精确评估。
-
-        返回一个全新、字段完整的 LayoutCandidate(可直接 save)；失败返回 None。
-        通过临时改写模块级 MAX_GRASPS_PER_POSE 控制 cap，evaluate_layout 内部会
-        先清空逐位姿 IK 缓存，所以不会串到旧的近似结果。
-        """
+        """在指定 grasp cap 下，对 src 布局(相同装配区 + 相同 xy)重新精确评估。"""
         global MAX_GRASPS_PER_POSE
         old_cap = MAX_GRASPS_PER_POSE
         MAX_GRASPS_PER_POSE = cap
@@ -1114,10 +882,7 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         return out
 
     def _auth_exact_rescore(self, cands: List[LayoutCandidate]) -> List[LayoutCandidate]:
-        """对候选列表用 AUTH_EXACT_CAP(默认 0=全量 grasp)逐个精确重打分。
-
-        返回按精确 layout_score 降序排好、字段完整的候选(失败的被丢弃)。
-        """
+        """对候选列表用 AUTH_EXACT_CAP(默认 0=全量 grasp)逐个精确重打分。"""
         rescored: List[LayoutCandidate] = []
         for rank, c in enumerate(cands, start=1):
             approx = c.layout_score
@@ -1133,13 +898,7 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
         return rescored
 
     def _auth_local_polish(self, base: LayoutCandidate) -> LayoutCandidate:
-        """在 base 周围对各零件 xy 做随机扰动爬山(近似 cap)，返回近似分最高的布局。
-
-        - 第一件(preassembled)固定在目标位，不扰动。
-        - 扰动后裁剪回桌面范围；任何硬约束不满足由 evaluate_layout 直接拒绝。
-        - 失败或不改进则缩小步长，自适应收敛。
-        打磨用近似 cap(AUTH_POLISH_CAP)以控成本，最终权威分由外层再做一次精确重打分。
-        """
+        """在 base 周围对各零件 xy 做随机扰动爬山(近似 cap)，返回近似分最高的布局。"""
         if base is None or AUTH_POLISH_ITERS <= 0:
             return base
 
@@ -1199,11 +958,7 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                           n_samples: int,
                           max_resample_layout: int,
                           verbose: bool) -> Optional[Dict[str, Any]]:
-        """对单个 seed 跑完整管线:explore -> 收敛 -> 精确重打分 top-K -> 局部打磨。
-
-        返回一个结果字典(best / exact_ranked / conv_curve / converged / ...)；
-        该 seed 完全找不到可行布局时返回 None。
-        """
+        """对单个 seed 跑完整管线:explore -> 收敛 -> 精确重打分 top-K -> 局部打磨。"""
         rng = np.random.default_rng(seed)
         assembly_regions = self._assembly_region_candidates()
 
@@ -1283,13 +1038,7 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
                       l3_top_k: int = 3,
                       l3_obstacle_mode: str = "staging_aware",
                       require_l3: bool = True) -> Optional[LayoutCandidate]:
-        """权威最优布局管线 + 多 seed 复现(AUTH_ENABLE=True 时)。
-
-        对每个 seed 独立跑:explore(分批近似) -> 收敛判据 -> 精确重打分 top-K -> 局部打磨；
-        然后做跨 seed 一致性判定(同区域? 分数 CV? xy 漂移?)，给出权威结论并返回全局最优。
-
-        AUTH_ENABLE=False 时退回父类单批随机搜索，行为与原脚本一致。
-        """
+        """权威最优布局管线 + 多 seed 复现(AUTH_ENABLE=True 时)。"""
         if not AUTH_ENABLE:
             return super().random_search(
                 n_samples=n_samples, seed=seed, max_resample_layout=max_resample_layout,
@@ -1464,21 +1213,12 @@ class FastWeightedInitialLayoutSearcher(WeightedInitialLayoutSearcher):
 
 
 def _patch_module_to_use_fast_searcher() -> None:
-    """让 ``fol.main()`` 调用 fast 版本的 Searcher。
-
-    原 ``main`` 是 ``WeightedInitialLayoutSearcher(...)`` 直接调本模块名字，
-    所以这里替换 module-level 引用即可，无需复制 ~150 行 CLI 代码。
-    """
+    """让 ``fol.main()`` 调用 fast 版本的 Searcher。"""
     fol.WeightedInitialLayoutSearcher = FastWeightedInitialLayoutSearcher
 
 
 def _maybe_inject_default_flags() -> None:
-    """按 fast 脚本约定，给 ``sys.argv`` 补默认开关。
-
-    目前只补一个 ``--disable-order-x-constraint``。
-    用户已经手写了同名开关时不会被重复注入；想恢复 enforce，
-    把模块顶部的 ``DEFAULT_DISABLE_ORDER_X`` 改成 False 即可。
-    """
+    """按 fast 脚本约定，给 ``sys.argv`` 补默认开关。"""
     if DEFAULT_DISABLE_ORDER_X and "--disable-order-x-constraint" not in sys.argv:
         sys.argv.append("--disable-order-x-constraint")
 
