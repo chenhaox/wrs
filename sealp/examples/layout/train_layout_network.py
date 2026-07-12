@@ -53,6 +53,22 @@ def _parse_score_threshold(spec: str):
     return None, float(spec)
 
 
+def _parse_pos_weight(spec: str):
+    """解析 --pos-weight: 'auto' 或正浮点数。"""
+    text = str(spec).strip()
+    if text.lower() == "auto":
+        return "auto"
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--pos-weight 必须是 'auto' 或正浮点数，例如 2.5"
+        ) from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("--pos-weight 必须大于 0")
+    return value
+
+
 def _parse_args():
     p = argparse.ArgumentParser(description="Layout learning trainer")
     p.add_argument("--dataset", required=True, help="layout_dataset.jsonl 路径")
@@ -88,18 +104,48 @@ def _parse_args():
     p.add_argument("--beta", type=float, default=1.0, help="xy proposal 权重")
     p.add_argument("--gamma", type=float, default=0.5, help="station/region 权重")
     p.add_argument("--kl", type=float, default=0.01, help="CVAE KL 权重")
-    p.add_argument("--pos-weight", type=float, default=3.0, help="可行样本正类加权")
+    p.add_argument(
+        "--pos-weight", type=_parse_pos_weight, default="auto",
+        help="可行样本正类加权: 'auto'=按当前训练 split 的 neg/pos 自动计算，或指定正浮点数")
     p.add_argument("--score-threshold", default="quantile:0.70",
                    help="elite 阈值: 'quantile:0.70' 或绝对值如 '0.4'")
+    # ---- seqrel 专用 loss / 调试 (其它模型默认关闭, 不受影响) ----
+    p.add_argument("--rank-weight", type=float, default=0.0,
+                   help="pair-ranking loss 权重 (seqrel 建议 0.5); 0=关闭")
+    p.add_argument("--fail-weight", type=float, default=0.0,
+                   help="fail 辅助分类权重 (seqrel 建议 0.2); 0=关闭")
+    p.add_argument("--rank-margin", type=float, default=0.05)
+    p.add_argument("--rank-min-score-gap", type=float, default=0.05)
+    p.add_argument("--rank-pairs-per-batch", type=int, default=256)
+    p.add_argument("--use-focal", action="store_true",
+                   help="L_cls 使用 focal loss (默认 BCEWithLogits)")
+    p.add_argument("--focal-gamma", type=float, default=2.0)
+    p.add_argument("--debug-grad", action="store_true",
+                   help="每 epoch 前几个 batch 打印 logits/梯度诊断并做自动检查")
+    p.add_argument("--debug-batches", type=int, default=3)
+    p.add_argument("--limit-samples", type=int, default=0,
+                   help=">0 时分层截断数据集 (overfit smoke test 用)")
+    p.add_argument("--shuffle-labels", action="store_true",
+                   help="随机置换标签的 sanity check (指标应崩到随机水平)")
     return p.parse_args()
 
 
 def main():
     args = _parse_args()
     elite_quantile, abs_thr = _parse_score_threshold(args.score_threshold)
+    # auto 模式的真正权重会在 train_model 完成 train/val split 后计算。
+    # 这里使用 1.0 作为临时占位，避免把字符串传入 loss dataclass。
+    initial_pos_weight = 1.0 if args.pos_weight == "auto" else float(args.pos_weight)
     weights = LossWeights(alpha=args.alpha, beta=args.beta, gamma=args.gamma,
-                          kl=args.kl, pos_weight=args.pos_weight,
-                          score_threshold=abs_thr)
+                          kl=args.kl, pos_weight=initial_pos_weight,
+                          score_threshold=abs_thr,
+                          rank_weight=args.rank_weight,
+                          fail_weight=args.fail_weight,
+                          rank_margin=args.rank_margin,
+                          rank_min_score_gap=args.rank_min_score_gap,
+                          rank_pairs_per_batch=args.rank_pairs_per_batch,
+                          use_focal=args.use_focal,
+                          focal_gamma=args.focal_gamma)
     models = MODEL_NAMES if args.model == "all" else [args.model]
     for name in models:
         mkwargs = size_kwargs(name, args.model_size)   # 解析后的显式构造参数
@@ -119,6 +165,7 @@ def main():
             seed=args.seed,
             device=args.device,
             loss_weights=weights,
+            pos_weight=args.pos_weight,
             model_kwargs=mkwargs,
             topk=args.topk,
             split_mode=args.split_mode,
@@ -129,6 +176,10 @@ def main():
             early_stop_patience=args.early_stop_patience,
             early_stop_metric=args.early_stop_metric,
             min_delta=args.min_delta,
+            debug_grad=args.debug_grad,
+            debug_batches=args.debug_batches,
+            limit_samples=args.limit_samples,
+            shuffle_labels=args.shuffle_labels,
             verbose=True,
         )
 

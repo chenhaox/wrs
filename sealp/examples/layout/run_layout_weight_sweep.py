@@ -24,7 +24,7 @@ refine_steps / max_evals / cdprim / obstacle_mode) 下各跑一次 global search
 ====
     python -m sealp.examples.layout.run_layout_weight_sweep \
         --presets balanced,grasp_first,manip_first,distance_first,rotation_first,execution_safe \
-        --seeds 0,1,2 \
+        --seeds 0,1,2,3 \
         --global-explore 80 --global-elite 5 \
         --global-refine-steps 0.03,0.015,0.008 --global-max-evals 500 \
         --cdprim-type box \

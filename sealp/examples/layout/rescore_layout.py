@@ -48,7 +48,7 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple
 
-# 与 find_optimal_initial_layout_tower_strict_pycharm.py 中的 DEFAULT_W_* 保持一致
+# 与 find_optimal_initial_layout_tower_strict.py 中的 DEFAULT_W_* 保持一致
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "grasp": 0.30,
     "manip": 0.30,

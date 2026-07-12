@@ -25,6 +25,7 @@
         --global-refine-steps 0.03,0.015,0.008 --global-max-evals 300 \
         --output-name tower_neural_sagpn
     # baseline: --model mlp/deepsets/gcn/gat/cvae/diffusion + 对应 checkpoint
+    # 加速: --no-refine 跳过 Phase B; 或 --global-refine-steps 0.03 --global-refine-rounds 1 --global-elite 1
     #
     # 装配站采样模式 (--station-mode):
     #   continuous (默认) 连续可行域采样, SAGPN 回归站位 + 邻域抖动;
@@ -45,8 +46,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-import find_optimal_initial_layout_tower_strict_pycharm as fol
-import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
+import find_optimal_initial_layout_tower_strict as fol
+import find_optimal_initial_layout_tower_strict_fast as fast
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2
 import find_optimal_initial_layout_tower_global as gmod
 import generate_layout_dataset as gends
@@ -69,6 +70,11 @@ NCFG: Dict[str, object] = {
     #   "continuous" -> 连续可行域采样 (SAGPN 回归站位 + 邻域抖动);
     #   "grid3x3"    -> 复用原始 3x3 网格 center-first 站位 (SAGPN 仍在各站位上做零件提案)。
     "station_mode": "continuous",
+    # scorer 排序方式:
+    #   "tuple" -> 先按 (feas_prob>=min, feas_prob, score) 字典序 (默认, 与旧行为一致);
+    #   "blend" -> 按 rank_score = w*feas_prob + (1-w)*normalized_score 排序 (seqrel 推荐)。
+    "rank_mode": "tuple",
+    "rank_blend_feas": 0.7,     # blend 模式下 feasibility 概率的权重
 }
 
 
@@ -266,10 +272,23 @@ class NeuralGlobalSearcher(gmod.GlobalLayoutSearcher):
         feas_prob = pred["feas_prob"]
         score = pred["score"]
 
-        # 3) 排序: 先按预测可行概率, 再按预测分数
-        order = sorted(range(len(pool)),
-                       key=lambda j: (feas_prob[j] >= feas_min, feas_prob[j], score[j]),
-                       reverse=True)
+        # 3) 排序: tuple(默认) 或 blend(rank_score = w*feas + (1-w)*norm_score)
+        rank_mode = str(NCFG.get("rank_mode", "tuple"))
+        if rank_mode == "blend":
+            w = float(NCFG.get("rank_blend_feas", 0.7))
+            s = np.asarray(score, dtype=float)
+            s_min, s_max = float(s.min()), float(s.max())
+            s_norm = (s - s_min) / (s_max - s_min) if s_max - s_min > 1e-9 else np.zeros_like(s)
+            rank_score = w * np.asarray(feas_prob, dtype=float) + (1.0 - w) * s_norm
+            order = sorted(range(len(pool)),
+                           key=lambda j: (feas_prob[j] >= feas_min, float(rank_score[j])),
+                           reverse=True)
+            if verbose:
+                print(f"[score] rank_mode=blend w_feas={w:.2f}")
+        else:
+            order = sorted(range(len(pool)),
+                           key=lambda j: (feas_prob[j] >= feas_min, feas_prob[j], score[j]),
+                           reverse=True)
 
         # 4) top-K 交给原始 evaluate_layout
         feasible: List[LayoutCandidate] = []
@@ -296,6 +315,7 @@ class NeuralGlobalSearcher(gmod.GlobalLayoutSearcher):
                       enable_l3=False, l3_top_k=3, l3_obstacle_mode="staging_aware",
                       require_l3=True) -> Optional[LayoutCandidate]:
         rng = np.random.default_rng(seed)
+        self._reset_eval_progress_stats()
         gmod.GCFG["max_resample_layout"] = int(max_resample_layout)
 
         runner = self._runner
@@ -305,6 +325,7 @@ class NeuralGlobalSearcher(gmod.GlobalLayoutSearcher):
         steps = [float(s) for s in gmod.GCFG["refine_steps"]]
         rounds = int(gmod.GCFG["refine_rounds"])
         diagonal = bool(gmod.GCFG["refine_diagonal"])
+        refine_enabled = bool(gmod.GCFG["refine_enabled"]) and len(steps) > 0 and rounds > 0
 
         print("\n========== Neural-Guided Layout Search ==========")
         print(f"model           = {NCFG['model']}  ({'generator' if is_gen else 'scorer'})")
@@ -312,7 +333,11 @@ class NeuralGlobalSearcher(gmod.GlobalLayoutSearcher):
         print(f"top_k_proposals = {NCFG['top_k_proposals']}")
         print(f"scorer_pool     = {NCFG['scorer_pool']}")
         print(f"station_mode    = {NCFG['station_mode']}")
-        print(f"elite (refine)  = {elite_k}, refine steps={steps}")
+        print(f"elite (refine)  = {elite_k}, refine enabled={refine_enabled}")
+        if refine_enabled:
+            print(f"refine steps    = {steps}, rounds={rounds}, diagonal={diagonal}")
+        else:
+            print(f"refine steps    = SKIPPED (--no-refine)")
         print(f"max_evals       = {nsga2._CFG.get('max_evals')}")
         print(f"L3 default/cur  = {'ON' if enable_l3 else 'OFF'}")
 
@@ -351,15 +376,18 @@ class NeuralGlobalSearcher(gmod.GlobalLayoutSearcher):
         for r, c in enumerate(elites[:elite_k], 1):
             print(f"  elite#{r} score={c.layout_score:.4f} region={c.assembly_region_id}")
 
-        # Phase B: pattern refine (原逻辑不变)
-        print("\n---------- Phase B: pattern refine (original) ----------")
+        # Phase B: pattern refine (原逻辑不变; 可用 --no-refine 跳过)
         refined: List[LayoutCandidate] = []
-        for r, c in enumerate(elites[:elite_k], 1):
-            if self._eval_budget_exhausted():
-                refined.append(c)
-                continue
-            print(f"[refine] elite#{r} (start score={c.layout_score:.4f}) ...")
-            refined.append(self._pattern_refine(c, steps, rounds, diagonal, verbose))
+        if refine_enabled:
+            print("\n---------- Phase B: pattern refine (original) ----------")
+            for r, c in enumerate(elites[:elite_k], 1):
+                if self._eval_budget_exhausted():
+                    refined.append(c)
+                    continue
+                print(f"[refine] elite#{r} (start score={c.layout_score:.4f}) ...")
+                refined.append(self._pattern_refine(c, steps, rounds, diagonal, verbose))
+        else:
+            print("\n---------- Phase B: SKIPPED (--no-refine) ----------")
 
         pool = [c for c in (list(feasible) + list(refined)) if bool(getattr(c, "l2_pass", False))]
         all_elites = self._unique_elites(pool, limit=max(int(gmod.GCFG["elite"]), int(l3_top_k)))
@@ -374,6 +402,7 @@ class NeuralGlobalSearcher(gmod.GlobalLayoutSearcher):
         print(f"real evaluations    = {self._nsga_eval_count}")
         print(f"eval cache hits     = {self._nsga_cache_hits}")
         print(f"feasible found      = {len(feasible)}")
+        self.print_search_eval_progress()
         print(f"[BEST-L2] score={best.layout_score:.4f} region={best.assembly_region_id} rc={best.assembly_region_rc}")
         print(f"  grasp_counts={best.grasp_counts}")
         print(f"  arm_choice  ={best.arm_choice}")
@@ -432,6 +461,16 @@ def _consume_neural_args() -> None:
             print(f"[neural] WARN: 未知 --station-mode '{v}', 回退 continuous。")
             mode = "continuous"
         NCFG["station_mode"] = mode
+    v = fast._consume_extra_value("--rank-mode")
+    if v is not None:
+        rm = str(v).strip().lower()
+        if rm not in ("tuple", "blend"):
+            print(f"[neural] WARN: 未知 --rank-mode '{v}', 回退 tuple。")
+            rm = "tuple"
+        NCFG["rank_mode"] = rm
+    v = fast._consume_extra_value("--rank-blend-feas")
+    if v is not None:
+        NCFG["rank_blend_feas"] = float(v)
 
 
 def _patch_module() -> None:

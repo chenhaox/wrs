@@ -21,7 +21,7 @@
 6. 保存综合得分最高的 layout，供后续执行脚本使用.
 
 推荐放置：
-    sealp/examples/layout/find_optimal_initial_layout_tower_strict_pycharm.py
+    sealp/examples/layout/find_optimal_initial_layout_tower_strict.py
 
 PyCharm 右键运行：
     不需要填写任何参数，默认读取当前 Tower 的 asmdef / sample_config / tower_grasp，

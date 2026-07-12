@@ -3,7 +3,7 @@
 """Fast Strict Tower Initial Layout Search — PyCharm Runnable
 ==========================================================
 
-这是 ``find_optimal_initial_layout_tower_strict_pycharm.py`` 的加速版。
+这是 ``find_optimal_initial_layout_tower_strict.py`` 的加速版。
 **约束、过滤规则、打分公式与输出格式与原版完全一致**，本文件只重写实现细节。
 
 加速思路（每一项都已实测在循环里成本最高的位置）:
@@ -118,8 +118,8 @@ if _THIS_DIR not in sys.path:
 
 # 复用原脚本的 helper / dataclass / 默认参数 / main()。
 # 这样保证 CLI、输出格式、所有 default 跟原脚本一致。
-import find_optimal_initial_layout_tower_strict_pycharm as fol
-from find_optimal_initial_layout_tower_strict_pycharm import (
+import find_optimal_initial_layout_tower_strict as fol
+from find_optimal_initial_layout_tower_strict import (
     HOME_JV,
     LayoutCandidate,
     RotCandidate,

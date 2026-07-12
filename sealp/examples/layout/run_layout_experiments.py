@@ -48,7 +48,7 @@ METHOD_MODULE = {
     "global": "sealp.examples.layout.find_optimal_initial_layout_tower_global",
 }
 NN_METHODS = ["mlp", "deepsets", "set_transformer", "gcn", "gat",
-              "transformer", "pointnet", "cvae", "diffusion", "sagpn"]
+              "transformer", "pointnet", "cvae", "diffusion", "sagpn", "seqrel"]
 NEURAL_MODULE = "sealp.examples.layout.find_optimal_initial_layout_tower_neural"
 
 
@@ -57,6 +57,14 @@ def _parse_args():
     p.add_argument("--methods", default="random,nsga2,global,mlp,gcn,gat,sagpn")
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--checkpoint-dir", default=os.path.join("checkpoints", "layout_models"))
+    p.add_argument("--checkpoint-map", default="",
+                   help="per-model checkpoint paths, e.g. mlp=path1,deepsets=path2,seqrel=path3")
+    p.add_argument("--mlp-checkpoint", default=None)
+    p.add_argument("--deepsets-checkpoint", default=None)
+    p.add_argument("--seqrel-checkpoint", default=None)
+    p.add_argument("--gcn-checkpoint", default=None)
+    p.add_argument("--gat-checkpoint", default=None)
+    p.add_argument("--sagpn-checkpoint", default=None)
     p.add_argument("--results-dir", default=os.path.join(_OUTPUT_DIR, "experiments"))
     p.add_argument("--python", default=sys.executable, help="运行子进程的解释器")
     p.add_argument("--common", default="", help="所有方法共享的透传 CLI 参数 (字符串)")
@@ -71,7 +79,42 @@ def _parse_args():
     return p.parse_args()
 
 
-def _build_cmd(args, method: str, seed: int, out_name: str) -> List[str]:
+def _resolve_checkpoint_map(args) -> Dict[str, str]:
+    """解析 checkpoint-map 与各 --{model}-checkpoint 参数。"""
+    ckpt: Dict[str, str] = {}
+    if args.checkpoint_map:
+        for part in args.checkpoint_map.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "=" not in part:
+                raise ValueError(f"checkpoint-map 格式错误: '{part}', 应为 model=path")
+            name, path = part.split("=", 1)
+            ckpt[name.strip()] = os.path.abspath(path.strip())
+    for method in NN_METHODS:
+        val = getattr(args, f"{method}_checkpoint", None)
+        if val:
+            ckpt[method] = os.path.abspath(val)
+    return ckpt
+
+
+def _checkpoint_for_method(args, method: str, ckpt_map: Dict[str, str]) -> str:
+    if method in ckpt_map:
+        path = ckpt_map[method]
+    else:
+        path = os.path.join(args.checkpoint_dir, f"{method}_best.pt")
+        path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"[exp] checkpoint 不存在: method={method} path={path}\n"
+            f"请用 --checkpoint-map 或 --{method}-checkpoint 指定正确路径。")
+    print(f"[exp] {method} checkpoint = {path}")
+    return path
+
+
+def _build_cmd(args, method: str, seed: int, out_name: str,
+               ckpt_map: Optional[Dict[str, str]] = None,
+               ckpt_path: Optional[str] = None) -> List[str]:
     py = args.python
     common = shlex.split(args.common)
     max_evals = str(args.max_evals)
@@ -88,7 +131,8 @@ def _build_cmd(args, method: str, seed: int, out_name: str) -> List[str]:
                     "--global-refine-steps", args.global_refine_steps]
         # random(strict) 没有 eval 上限旋钮, 用 n-samples 控制评估次数
     elif method in NN_METHODS:
-        ckpt = os.path.join(args.checkpoint_dir, f"{method}_best.pt")
+        ckpt_map = ckpt_map or {}
+        ckpt = ckpt_path or _checkpoint_for_method(args, method, ckpt_map)
         cmd = base + [NEURAL_MODULE, "--model", method, "--checkpoint", ckpt,
                       "--output-name", out_name, "--seed", str(seed),
                       "--n-samples", str(args.n_samples),
@@ -115,6 +159,8 @@ def _parse_stdout(text: str) -> Dict[str, Optional[float]]:
         "cache_hits": _num(r"eval cache hits\s*=\s*(\d+)", int),
         "feasible_found": _num(r"feasible found\s*=\s*(\d+)", int),
         "wall_time": _num(r"wall-clock total = ([\d.]+)s"),
+        "first_l2_ok_eval": _num(r"first L2_OK at eval # = (\d+)", int),
+        "best_score_eval": _num(r"best score first at\s+= #(\d+)", int),
         "l3_passed": 1.0 if re.search(r"\[OK\] L3 passed", text) else None,
     }
 
@@ -133,10 +179,12 @@ def _read_debug(out_name: str) -> Dict:
 def _metrics_from_debug(dbg: Dict) -> Dict[str, Optional[float]]:
     if not dbg:
         return {"best_score": None, "avg_grasp": None, "avg_dist": None,
-                "grasp": None, "manip": None, "dist": None, "rot": None, "spatial": None}
+                "grasp": None, "manip": None, "dist": None, "rot": None, "spatial": None,
+                "first_l2_ok_eval": None, "best_score_eval": None}
     comp = dbg.get("score_components", {})
     gc = list((dbg.get("grasp_counts") or {}).values())
     pd = list((dbg.get("per_part_dist") or {}).values())
+    ses = dbg.get("search_eval_stats") or {}
     return {
         "best_score": dbg.get("score"),
         "avg_grasp": float(statistics.mean(gc)) if gc else None,
@@ -146,12 +194,17 @@ def _metrics_from_debug(dbg: Dict) -> Dict[str, Optional[float]]:
         "dist": comp.get("dist"),
         "rot": comp.get("rot"),
         "spatial": comp.get("spatial_y_distribution"),
+        "first_l2_ok_eval": ses.get("first_l2_ok_eval"),
+        "best_score_eval": ses.get("best_score_eval"),
     }
 
 
-def _run_one(args, method: str, seed: int) -> Dict:
+def _run_one(args, method: str, seed: int, ckpt_map: Dict[str, str]) -> Dict:
     out_name = f"exp_{method}_seed{seed}"
-    cmd = _build_cmd(args, method, seed, out_name)
+    ckpt_path = ""
+    if method in NN_METHODS:
+        ckpt_path = _checkpoint_for_method(args, method, ckpt_map)
+    cmd = _build_cmd(args, method, seed, out_name, ckpt_map, ckpt_path)
     log_dir = os.path.join(args.results_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{out_name}.log")
@@ -177,6 +230,7 @@ def _run_one(args, method: str, seed: int) -> Dict:
     row = {
         "method": method,
         "seed": seed,
+        "checkpoint_path": ckpt_path,
         "exit_code": proc.returncode,
         "runtime_s": round(parsed.get("wall_time") or dt, 2),
         "best_score": md["best_score"],
@@ -186,6 +240,8 @@ def _run_one(args, method: str, seed: int) -> Dict:
         "l2_feasible_rate": (feas / real) if (real and feas is not None) else None,
         "cache_hits": cache,
         "cache_hit_rate": (cache / (real + cache)) if (real and cache is not None) else None,
+        "first_l2_ok_eval": parsed.get("first_l2_ok_eval") or md.get("first_l2_ok_eval"),
+        "best_score_eval": parsed.get("best_score_eval") or md.get("best_score_eval"),
         "l3_passed": parsed.get("l3_passed"),
         "avg_grasp": md["avg_grasp"],
         "avg_dist": md["avg_dist"],
@@ -259,12 +315,13 @@ def main():
     args = _parse_args()
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     seeds = [int(s) for s in args.seeds.replace(",", " ").split()]
+    ckpt_map = _resolve_checkpoint_map(args)
     os.makedirs(args.results_dir, exist_ok=True)
 
     rows: List[Dict] = []
     for method in methods:
         for seed in seeds:
-            rows.append(_run_one(args, method, seed))
+            rows.append(_run_one(args, method, seed, ckpt_map))
 
     if args.dry_run:
         return
@@ -280,7 +337,8 @@ def main():
     summary = _aggregate(rows)
     summary_path = os.path.join(args.results_dir, "summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+        json.dump({"checkpoint_map": ckpt_map, "summary": summary}, f,
+                  ensure_ascii=False, indent=2)
     print(f"[exp] summary -> {summary_path}")
 
     print("\n========== Summary ==========")

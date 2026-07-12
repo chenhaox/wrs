@@ -406,3 +406,64 @@ def _ordered_parts(sample: Dict) -> List[Dict]:
 
 def sample_num_parts(sample: Dict) -> int:
     return len(sample.get("parts", []))
+
+
+# ------------------------------------------------------------
+# 辅助监督: fail 类别 + pair-ranking 分组键 (seqrel 用)
+# 说明: 这些函数**不改变** node/global/edge 特征维度, 因此不影响任何已有 checkpoint;
+#       只是为 dataset.collate 额外产出可选的 batch 字段 (group_id / fail_class),
+#       其它模型忽略这些字段即可。
+# ------------------------------------------------------------
+
+# 有限 fail 类别 (顺序即类别索引)。-1 = 可行样本(不参与辅助分类)。
+FAIL_CLASSES = [
+    "no_common_gids",
+    "pair_collision",
+    "clearance",
+    "arm_collision_or_keepout",
+    "other",
+]
+FAIL_CLASS_TO_IDX = {name: i for i, name in enumerate(FAIL_CLASSES)}
+NUM_FAIL_CLASSES = len(FAIL_CLASSES)
+_FAIL_IGNORE_INDEX = -1
+
+
+def fail_reason_class(sample: Dict) -> int:
+    """把 sample 的 fail_reason / fail_part / fail_detail 归并为有限类别索引。
+
+    可行样本返回 -1 (CrossEntropy 用 ignore_index 忽略)。
+    """
+    if bool(sample.get("l2_pass", False)):
+        return _FAIL_IGNORE_INDEX
+
+    parts = [str(sample.get("fail_reason", "") or ""),
+             str(sample.get("fail_part", "") or "")]
+    detail = sample.get("fail_detail", {}) or {}
+    if isinstance(detail, dict):
+        parts.extend(str(k) for k in detail.keys())
+    text = " ".join(parts).lower()
+
+    # 关键词优先级: 先判定更具体的臂/keepout, 再一般碰撞。
+    if ("arm" in text) or ("keepout" in text) or ("home" in text):
+        return FAIL_CLASS_TO_IDX["arm_collision_or_keepout"]
+    if ("common_gids" in text) or ("no_common" in text) or ("reason" in text) \
+            or ("common gids" in text):
+        return FAIL_CLASS_TO_IDX["no_common_gids"]
+    if "clearance" in text:
+        return FAIL_CLASS_TO_IDX["clearance"]
+    if ("pair_collision" in text) or ("pairwise" in text) or ("collision" in text) \
+            or ("overlap" in text):
+        return FAIL_CLASS_TO_IDX["pair_collision"]
+    return FAIL_CLASS_TO_IDX["other"]
+
+
+def ranking_group_key(sample: Dict) -> str:
+    """pair-ranking 分组键: 同 seed + 相近装配站 (量化到 ~5cm) 视为同组。
+
+    只在同组的 feasible 样本之间构造 (score 高 -> 预测高) 的排序对, 避免跨站位比较。
+    """
+    seed = int(sample.get("seed", 0))
+    pos = np.asarray(sample.get("assembly_station_pos", [0.0, 0.0, 0.0]), dtype=float)
+    gx = int(round(float(pos[0]) / 0.05))
+    gy = int(round(float(pos[1]) / 0.05))
+    return f"{seed}|{gx}|{gy}"

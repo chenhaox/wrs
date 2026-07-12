@@ -20,7 +20,10 @@
 其它相关参数:
     --gen-center-bias F        center_continuous: 中心采样概率 (其余 1-F 全域均匀), 默认 0.6;
     --gen-center-sigma-frac F  中心区尺度 / radial-shell 初始内环半径占比, 默认 0.25;
-    --gen-append               追加写(续采, 崩溃后接着采), 默认覆盖。
+    --gen-resume               安全续采: 扫描已落盘记录, 从每个 seed 的下一条继续;
+    --gen-threads N            限制 OMP/MKL/OpenBLAS 线程数, 适合低 CPU 长跑;
+    --gen-fsync-every N        每 N 条做一次 fsync (默认 1, 最安全);
+    --gen-append               仅追加写, 不恢复 seed 进度 (保留兼容, 不推荐)。
 
 说明: 其余参数(--asmdef/--config/--grasp-dir/--planner-obstacle-mode/... )
 与 find_optimal_initial_layout_tower_strict_pycharm / _global 完全一致。
@@ -30,9 +33,35 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import shutil
 import sys
 import time
 from typing import Dict, List, Optional, Sequence, Tuple
+
+
+def _configure_thread_env_from_argv() -> None:
+    """在导入 numpy 前设置 BLAS/OpenMP 线程上限。"""
+    value = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--gen-threads" and i + 1 < len(sys.argv):
+            value = sys.argv[i + 1]
+            break
+        if arg.startswith("--gen-threads="):
+            value = arg.split("=", 1)[1]
+            break
+    if value is None:
+        return
+    try:
+        n_threads = max(1, int(value))
+    except ValueError:
+        return
+    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                 "NUMEXPR_NUM_THREADS"):
+        os.environ[name] = str(n_threads)
+
+
+_configure_thread_env_from_argv()
 
 import numpy as np
 
@@ -40,8 +69,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-import find_optimal_initial_layout_tower_strict_pycharm as fol
-import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
+import find_optimal_initial_layout_tower_strict as fol
+import find_optimal_initial_layout_tower_strict_fast as fast
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2
 import find_optimal_initial_layout_tower_global as gmod
 
@@ -58,7 +87,11 @@ DCFG: Dict[str, object] = {
     # 装配站采样模式: center_continuous(默认) / uniform_continuous / grid3x3
     "station_mode": "center_continuous",
     "center_sigma_frac": 0.25,  # 中心区尺度 / radial-shell 初始内环半径占比
-    "append": False,            # 追加写(续采, 挽救崩溃); False=覆盖
+    "append": False,            # 仅追加写; 不自动恢复进度
+    "resume": False,            # 扫描已有记录并按 seed 安全续采
+    "threads": None,            # BLAS/OpenMP 线程上限
+    "fsync_every": 1,           # 每 N 条强制同步到磁盘; 1=最安全
+    "max_errors": 20,           # 单次运行最多容忍的候选评估异常
     "assembly_type": "",        # 任务类型标签 (空=从 asmdef 名推断); 跨任务泛化用
 }
 
@@ -179,8 +212,85 @@ def sample_station_by_mode(searcher, rng: np.random.Generator, mode: str,
     return None
 
 
+def _assembly_id(searcher) -> str:
+    asmdef_path = str(getattr(searcher, "asmdef_path", "") or "")
+    return os.path.splitext(os.path.basename(asmdef_path))[0] if asmdef_path else "unknown"
+
+
+def _generation_signature(searcher) -> str:
+    """标识会改变采样分布/标签口径的配置, 防止错误续接到另一组实验。"""
+    payload = {
+        "schema": 2,
+        "assembly_id": _assembly_id(searcher),
+        "station_mode": str(DCFG["station_mode"]),
+        "center_bias": float(DCFG["center_bias"]),
+        "center_sigma_frac": float(DCFG["center_sigma_frac"]),
+        "jitter": int(DCFG["jitter"]),
+        "jitter_sigma": float(DCFG["jitter_sigma"]),
+        "part_order": list(searcher.part_order),
+    }
+    text = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _stable_sample_id(signature: str, seed: int, sample_index: int) -> int:
+    """生成兼容旧 schema 的稳定整数 ID, resume 重跑不会产生新 ID。"""
+    text = f"{signature}:{int(seed)}:{int(sample_index)}"
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 62) - 1)
+
+
+def _scan_resume_state(out_path: str, signature: str) -> Tuple[Dict[int, int], int, int]:
+    """扫描已完成记录。若末次崩溃留下坏行, 备份原文件并保留所有有效行。"""
+    counts: Dict[int, int] = {}
+    feasible = 0
+    valid_records: List[Dict] = []
+    invalid_lines = 0
+    if not os.path.isfile(out_path):
+        return counts, feasible, 0
+
+    with open(out_path, "r", encoding="utf-8-sig") as fin:
+        for line_no, line in enumerate(fin, 1):
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                invalid_lines += 1
+                print(f"[dataset] WARN: 忽略损坏 JSONL 行 #{line_no}")
+                continue
+            valid_records.append(rec)
+            if str(rec.get("generation_signature", "")) != signature:
+                continue
+            sd = int(rec.get("seed", 0))
+            idx = int(rec.get("sample_index", -1))
+            counts[sd] = max(counts.get(sd, 0), idx + 1)
+            feasible += int(bool(rec.get("l2_pass", False)))
+
+    if invalid_lines:
+        backup = f"{out_path}.corrupt-{int(time.time())}.bak"
+        shutil.copy2(out_path, backup)
+        tmp_path = out_path + ".repair.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fout:
+            for rec in valid_records:
+                fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            fout.flush()
+            os.fsync(fout.fileno())
+        os.replace(tmp_path, out_path)
+        print(f"[dataset] repaired={invalid_lines} bad line(s), backup={backup}")
+    return counts, feasible, len(valid_records)
+
+
+def _durable_write(fout, record: Dict, write_count: int, fsync_every: int) -> None:
+    fout.write(json.dumps(record, ensure_ascii=False) + "\n")
+    fout.flush()
+    if fsync_every > 0 and write_count % fsync_every == 0:
+        os.fsync(fout.fileno())
+
+
 def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
-                          region: Tuple[str, Tuple[int, int], np.ndarray]) -> Dict:
+                          region: Tuple[str, Tuple[int, int], np.ndarray],
+                          sample_index: int, generation_signature: str) -> Dict:
     """把一个已评估的 LayoutCandidate + 静态元信息序列化成一条 dataset sample。"""
     part_order = list(searcher.part_order)
     first_pid = searcher._first_part_id() if searcher.preassemble_first_part else None
@@ -232,8 +342,7 @@ def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
         })
 
     # ---- 任务级元信息 (跨任务泛化用; 单 asmdef = 单任务) ----
-    asmdef_path = str(getattr(searcher, "asmdef_path", "") or "")
-    assembly_id = os.path.splitext(os.path.basename(asmdef_path))[0] if asmdef_path else "unknown"
+    assembly_id = _assembly_id(searcher)
     assembly_type = str(DCFG.get("assembly_type", "") or "") or assembly_id.split("_")[0] or "unknown"
 
     # ---- 装配站到桌面中心距离 (任务无关全局约束特征) ----
@@ -244,7 +353,10 @@ def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
     station_dist_center = float(np.hypot(st_pos[0] - tab_cx, st_pos[1] - tab_cy))
 
     return {
-        "sample_id": int(time.time_ns() % (1 << 62)),
+        "sample_id": _stable_sample_id(generation_signature, seed, sample_index),
+        "sample_index": int(sample_index),
+        "generation_signature": generation_signature,
+        "sampler_version": 2,
         "seed": int(seed),
         "task_id": assembly_id,
         "assembly_id": assembly_id,
@@ -292,9 +404,20 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
         mode = str(DCFG["station_mode"])
         center_bias = float(DCFG["center_bias"])
         center_sigma_frac = float(DCFG["center_sigma_frac"])
-        append = bool(DCFG["append"])
+        resume = bool(DCFG["resume"])
+        append = bool(DCFG["append"]) or resume
+        fsync_every = max(1, int(DCFG["fsync_every"]))
+        max_errors = max(1, int(DCFG["max_errors"]))
+        signature = _generation_signature(self)
         xs0, xs1, ys0, ys1 = station_safe_bounds(self)
         rx, ry = station_reference_center(self)
+
+        resume_counts: Dict[int, int] = {}
+        existing_feasible = 0
+        existing_total = 0
+        if resume:
+            resume_counts, existing_feasible, existing_total = _scan_resume_state(
+                out_path, signature)
 
         # grid3x3: 预计算离散网格中心 (center-first 排序), round-robin 使用。
         grid_regions: List[Tuple[str, Tuple[int, int], np.ndarray]] = []
@@ -316,27 +439,40 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
             print(f"grid centers  = {len(grid_regions)} (3x3 center-first round-robin)")
         print(f"jitter        = {jitter} variants x sigma={jsigma}m")
         print(f"max_evals     = {nsga2._CFG.get('max_evals')}")
+        print(f"signature     = {signature}")
+        print(f"durability    = flush each sample, fsync every {fsync_every}")
+        if resume:
+            print(f"resume state  = {resume_counts or '(new run)'}")
 
         t0 = time.time()
         n_written = 0
-        n_feasible = 0
+        n_feasible = existing_feasible
+        n_errors = 0
         best: Optional[LayoutCandidate] = None
         dists: List[float] = []  # 每个采纳站位到参考中心的距离 (监控采样分布)
         first_pid = self._first_part_id() if self.preassemble_first_part else None
 
-        gi = 0  # grid3x3 round-robin 指针
+        gi = sum(resume_counts.values())  # grid3x3 round-robin 指针
         open_mode = "a" if append else "w"
-        with open(out_path, open_mode, encoding="utf-8") as fout:
+        error_path = out_path + ".errors.jsonl"
+        with open(out_path, open_mode, encoding="utf-8") as fout, \
+                open(error_path, "a", encoding="utf-8") as ferr:
             for sd in seeds:
-                rng = np.random.default_rng(sd)
-                evaluated = 0
+                evaluated = int(resume_counts.get(sd, 0)) if resume else 0
+                if evaluated >= n_per_seed:
+                    print(f"[dataset] seed={sd} already complete ({evaluated}/{n_per_seed}), skip")
+                    continue
                 attempts = 0
-                max_attempts = n_per_seed * 4 + 50
+                max_attempts = max(1, n_per_seed - evaluated) * 4 + 50
+                print(f"[dataset] seed={sd} start at sample_index={evaluated}")
                 while evaluated < n_per_seed and attempts < max_attempts:
                     if self._eval_budget_exhausted():
                         print("[dataset] 停止: 达到 --global-max-evals。")
                         break
                     attempts += 1
+                    # 每个 sample_index 使用独立确定性随机流。中断后无需保存 RNG state。
+                    rng = np.random.default_rng(
+                        np.random.SeedSequence([int(sd), int(evaluated), int(attempts)]))
                     # 按 station_mode 采样一个装配站
                     if mode == "grid3x3":
                         if not grid_regions:
@@ -373,15 +509,38 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
                         base_variants.append(v)
 
                     for variant in base_variants:
-                        if self._eval_budget_exhausted():
+                        if evaluated >= n_per_seed or self._eval_budget_exhausted():
                             break
                         te = time.time()
-                        cand = self._evaluate_gene(variant, region)
-                        rec = sample_from_candidate(self, cand, sd, region)
+                        sample_index = evaluated
+                        try:
+                            cand = self._evaluate_gene(variant, region)
+                        except KeyboardInterrupt:
+                            raise
+                        except Exception as exc:
+                            n_errors += 1
+                            error_rec = {
+                                "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                "seed": int(sd),
+                                "sample_index": int(sample_index),
+                                "generation_signature": signature,
+                                "error_type": type(exc).__name__,
+                                "error": str(exc),
+                            }
+                            _durable_write(ferr, error_rec, n_errors, 1)
+                            print(f"[dataset] WARN: eval error {n_errors}/{max_errors}: "
+                                  f"{type(exc).__name__}: {exc}")
+                            if n_errors >= max_errors:
+                                raise RuntimeError(
+                                    f"连续采集累计 {n_errors} 个评估异常; "
+                                    f"详情见 {error_path}") from exc
+                            continue
+                        rec = sample_from_candidate(
+                            self, cand, sd, region, sample_index, signature)
                         rec["eval_time"] = float(time.time() - te)
                         rec["station_mode"] = mode
-                        fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
                         n_written += 1
+                        _durable_write(fout, rec, n_written, fsync_every)
                         evaluated += 1
                         if bool(getattr(cand, "l2_pass", False)):
                             n_feasible += 1
@@ -389,16 +548,22 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
                                 best = cand
                         if verbose and n_written % 20 == 0:
                             bs = float(best.layout_score) if best is not None else 0.0
+                            total_relevant = sum(resume_counts.values()) + n_written
                             print(f"[dataset] written={n_written} feasible={n_feasible} "
-                                  f"({100.0*n_feasible/max(n_written,1):.0f}%) "
+                                  f"({100.0*n_feasible/max(total_relevant,1):.0f}%) "
                                   f"evals={self._nsga_eval_count} best={bs:.4f}")
                 fout.flush()
+                os.fsync(fout.fileno())
 
         d_arr = np.asarray(dists, dtype=float) if dists else np.zeros(1)
         print("\n========== Dataset Summary ==========")
         print(f"station_mode     = {mode}")
-        print(f"total samples    = {n_written}")
-        print(f"feasible samples = {n_feasible} ({100.0 * n_feasible / max(n_written,1):.1f}%)")
+        print(f"new samples      = {n_written}")
+        print(f"existing records = {existing_total if resume else 0}")
+        relevant_total = sum(resume_counts.values()) + n_written
+        print(f"feasible samples = {n_feasible} "
+              f"({100.0 * n_feasible / max(relevant_total,1):.1f}%)")
+        print(f"eval errors      = {n_errors}")
         print(f"station dist->center: mean={float(d_arr.mean()):.3f} "
               f"min={float(d_arr.min()):.3f} max={float(d_arr.max()):.3f} (m)")
         print(f"best layout_score= {float(best.layout_score) if best is not None else 0.0:.4f}")
@@ -440,6 +605,18 @@ def _consume_dataset_args() -> None:
         DCFG["center_sigma_frac"] = float(v)
     if fast._consume_extra_flag("--gen-append"):
         DCFG["append"] = True
+    if fast._consume_extra_flag("--gen-resume"):
+        DCFG["resume"] = True
+        DCFG["append"] = True
+    v = fast._consume_extra_value("--gen-threads")
+    if v is not None:
+        DCFG["threads"] = max(1, int(v))
+    v = fast._consume_extra_value("--gen-fsync-every")
+    if v is not None:
+        DCFG["fsync_every"] = max(1, int(v))
+    v = fast._consume_extra_value("--gen-max-errors")
+    if v is not None:
+        DCFG["max_errors"] = max(1, int(v))
     v = fast._consume_extra_value("--gen-assembly-type")
     if v is not None:
         DCFG["assembly_type"] = str(v).strip()
@@ -471,6 +648,9 @@ def main() -> None:
     wall_t0 = time.perf_counter()
     try:
         fol.main()
+    except KeyboardInterrupt:
+        print("\n[dataset] 用户中断；已完成样本均已安全落盘。"
+              "使用完全相同命令并加/保留 --gen-resume 即可续跑。")
     finally:
         print(f"[dataset] wall-clock total = {time.perf_counter() - wall_t0:.3f}s")
 

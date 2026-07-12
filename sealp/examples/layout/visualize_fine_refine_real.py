@@ -27,7 +27,7 @@ python -m sealp.examples.layout.visualize_fine_refine_real \
     --layout .../tower_global.layout --part post_fr \
     --steps 0.03,0.015,0.008 --rounds 2 --diagonal --heatmap 9
 
-说明: 本脚本的搜索器构造刻意"镜像" find_optimal_initial_layout_tower_strict_pycharm.py
+说明: 本脚本的搜索器构造刻意"镜像" find_optimal_initial_layout_tower_strict.py
 的 main() 构造块, 以保证与真实搜索完全同口径。
 """
 
@@ -53,8 +53,8 @@ _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-import find_optimal_initial_layout_tower_strict_pycharm as fol  # noqa: E402
-import find_optimal_initial_layout_tower_strict_pycharm_fast as fast  # noqa: E402
+import find_optimal_initial_layout_tower_strict as fol  # noqa: E402
+import find_optimal_initial_layout_tower_strict_fast as fast  # noqa: E402
 import find_optimal_initial_layout_tower_global as glob  # noqa: E402
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2  # noqa: E402
 

@@ -15,8 +15,11 @@
 
 from __future__ import annotations
 
+import copy
+import csv
 import json
 import os
+import subprocess
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -166,6 +169,61 @@ def evaluate(model, loader, device, gen: bool, topk: int = 10) -> Dict[str, floa
 
 
 # ------------------------------------------------------------
+# 实验元数据 / 保存
+# ------------------------------------------------------------
+
+def _git_commit() -> str:
+    """返回当前 git commit hash; 失败时返回 'unknown'。"""
+    try:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, stderr=subprocess.DEVNULL, text=True)
+        return out.strip()
+    except Exception:
+        return "unknown"
+
+
+def experiment_save_dir(base_dir: str, model_name: str, split_mode: str,
+                        training_seed: int) -> str:
+    """规范实验目录: {base}/{model}/{split}/seed{N}/。"""
+    return os.path.join(base_dir, model_name, split_mode, f"seed{training_seed}")
+
+
+def _save_training_artifacts(save_dir: str, model_name: str, *,
+                             config: Dict, metrics: Dict, history: List[Dict],
+                             train_indices: List[int], val_indices: List[int],
+                             sample_ids: List) -> None:
+    """保存 config / metrics / history CSV / split indices; 复制 train.log。"""
+    os.makedirs(save_dir, exist_ok=True)
+    with open(os.path.join(save_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(save_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
+    split_payload = {
+        "train_indices": train_indices,
+        "val_indices": val_indices,
+        "train_sample_ids": [sample_ids[i] for i in train_indices],
+        "val_sample_ids": [sample_ids[i] for i in val_indices],
+    }
+    with open(os.path.join(save_dir, "split_indices.json"), "w", encoding="utf-8") as f:
+        json.dump(split_payload, f, ensure_ascii=False, indent=2)
+    if history:
+        hist_path = os.path.join(save_dir, "training_history.csv")
+        keys = list(history[0].keys())
+        with open(hist_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
+            for row in history:
+                w.writerow(row)
+    src_log = os.path.join(save_dir, f"{model_name}_train.log")
+    dst_log = os.path.join(save_dir, "train.log")
+    if os.path.isfile(src_log) and not os.path.isfile(dst_log):
+        with open(src_log, "r", encoding="utf-8") as sf, \
+             open(dst_log, "w", encoding="utf-8") as df:
+            df.write(sf.read())
+
+
+# ------------------------------------------------------------
 # train / val split
 # ------------------------------------------------------------
 
@@ -260,6 +318,17 @@ def _split_indices(samples: List[Dict], val_ratio: float, seed: int,
 # 训练
 # ------------------------------------------------------------
 
+def _group_grad_norms(model) -> Dict[str, float]:
+    """按参数名首段分组统计 grad L2 范数 (用于 --debug-grad)。"""
+    groups: Dict[str, float] = {}
+    for name, p in model.named_parameters():
+        if not p.requires_grad or p.grad is None:
+            continue
+        head = name.split(".")[0]
+        groups[head] = groups.get(head, 0.0) + float(p.grad.detach().pow(2).sum().item())
+    return {k: float(np.sqrt(v)) for k, v in groups.items()}
+
+
 def train_model(dataset_path: str,
                 model_name: str,
                 save_dir: str,
@@ -271,6 +340,7 @@ def train_model(dataset_path: str,
                 seed: int = 0,
                 device: Optional[str] = None,
                 loss_weights: Optional[LossWeights] = None,
+                pos_weight=None,
                 model_kwargs: Optional[Dict] = None,
                 max_parts: int = F.MAX_PARTS_DEFAULT,
                 topk: int = 10,
@@ -282,6 +352,10 @@ def train_model(dataset_path: str,
                 early_stop_patience: int = 0,
                 early_stop_metric: str = "composite",
                 min_delta: float = 1e-4,
+                debug_grad: bool = False,
+                debug_batches: int = 3,
+                limit_samples: int = 0,
+                shuffle_labels: bool = False,
                 verbose: bool = True) -> Dict:
     os.makedirs(save_dir, exist_ok=True)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -291,6 +365,31 @@ def train_model(dataset_path: str,
     samples = load_jsonl(dataset_path)
     if not samples:
         raise RuntimeError(f"数据集为空: {dataset_path}")
+    if limit_samples and limit_samples > 0 and limit_samples < len(samples):
+        # 分层截断: 尽量保留正/负样本各一部分 (overfit smoke test 用)。
+        rng_lim = np.random.RandomState(seed)
+        pos = [s for s in samples if s.get("l2_pass", False)]
+        neg = [s for s in samples if not s.get("l2_pass", False)]
+        rng_lim.shuffle(pos)
+        rng_lim.shuffle(neg)
+        n_pos_keep = max(1, min(len(pos), limit_samples // 2))
+        n_neg_keep = max(1, limit_samples - n_pos_keep)
+        samples = pos[:n_pos_keep] + neg[:n_neg_keep]
+        rng_lim.shuffle(samples)
+        if verbose:
+            print(f"[train] limit_samples={limit_samples} -> 实际 {len(samples)} "
+                  f"(pos={n_pos_keep} neg={min(len(neg), n_neg_keep)})")
+    if shuffle_labels:
+        # 标签置换 sanity check: 打乱 l2_pass / layout_score, 模型不应还能拿到正常指标。
+        rng_sh = np.random.RandomState(seed + 12345)
+        perm = rng_sh.permutation(len(samples))
+        feas_shuf = [bool(samples[i].get("l2_pass", False)) for i in perm]
+        score_shuf = [float(samples[i].get("layout_score", 0.0)) for i in perm]
+        for s, f_new, sc_new in zip(samples, feas_shuf, score_shuf):
+            s["l2_pass"] = f_new
+            s["layout_score"] = sc_new if f_new else 0.0
+        if verbose:
+            print("[train] shuffle_labels=True -> 标签已随机置换 (sanity check)")
     ds = LayoutDataset(samples, max_parts=max_parts, feature_version=feature_version)
 
     train_idx, val_idx = _split_indices(samples, val_ratio, seed, split_mode,
@@ -310,7 +409,8 @@ def train_model(dataset_path: str,
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         opt, mode="max", factor=0.5, patience=max(3, early_stop_patience // 3 or 5),
         min_lr=1e-6)
-    weights = loss_weights or LossWeights()
+    # 使用深拷贝，避免 auto pos_weight 修改调用方复用的 LossWeights 对象。
+    weights = copy.deepcopy(loss_weights) if loss_weights is not None else LossWeights()
 
     # ---- elite 分位阈值: 用训练集 feasible 分数的分位数 ----
     n_feas = sum(1 for s in samples if s.get("l2_pass", False))
@@ -326,9 +426,30 @@ def train_model(dataset_path: str,
                   f"-> score_threshold={weights.score_threshold:.4f} "
                   f"(train feasible={len(train_feas_scores)})")
 
-    # ---- 建议 pos_weight (若用户未显式给) 打印参考 ----
+    # ---- pos_weight: 仅根据当前训练 split 自动计算，避免验证集泄漏 ----
     n_pos = sum(1 for i in train_idx if samples[i].get("l2_pass", False))
     n_neg = len(train_idx) - n_pos
+    suggested_pos_weight = float(n_neg / max(n_pos, 1))
+
+    requested_pos_weight = weights.pos_weight if pos_weight is None else pos_weight
+    if isinstance(requested_pos_weight, str):
+        spec = requested_pos_weight.strip().lower()
+        if spec == "auto":
+            effective_pos_weight = suggested_pos_weight if n_pos > 0 else 1.0
+        else:
+            try:
+                effective_pos_weight = float(spec)
+            except ValueError as exc:
+                raise ValueError(
+                    "pos_weight 必须是 'auto' 或正浮点数，例如 2.5"
+                ) from exc
+    else:
+        effective_pos_weight = float(requested_pos_weight)
+
+    if not np.isfinite(effective_pos_weight) or effective_pos_weight <= 0:
+        raise ValueError(f"effective pos_weight 必须为正有限值，得到 {effective_pos_weight}")
+    weights.pos_weight = float(effective_pos_weight)
+
     if verbose:
         n_params = sum(p.numel() for p in model.parameters())
         print(f"[train] model={model_name} generator={gen} params={n_params:,} "
@@ -338,8 +459,11 @@ def train_model(dataset_path: str,
               f"device={device} flat_dim={flat_dim}")
         if feature_version == "v2":
             print("[train] NOTE: 使用 v2 自适应归一化特征, 与 v1 checkpoint 不兼容。")
+        mode_text = "auto" if isinstance(requested_pos_weight, str) and requested_pos_weight.strip().lower() == "auto" else "manual"
         print(f"[train] train pos/neg={n_pos}/{n_neg} "
-              f"(suggest pos_weight={n_neg/max(n_pos,1):.2f}, using={weights.pos_weight})")
+              f"suggested={suggested_pos_weight:.4f} "
+              f"requested={requested_pos_weight} "
+              f"effective={weights.pos_weight:.4f} mode={mode_text}")
         # 小数据 + 生成式 -> 警告
         if gen and (len(ds) < 3000 or n_feas < 500):
             print("=" * 70)
@@ -358,6 +482,14 @@ def train_model(dataset_path: str,
     since_improve = 0
     t0 = time.time()
 
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_opt_params = sum(p.numel() for g in opt.param_groups for p in g["params"])
+    zero_grad_streak = 0
+    if debug_grad and verbose:
+        print(f"[debug-grad] trainable_params={n_trainable:,} "
+              f"optimizer_params={n_opt_params:,} "
+              f"(match={'YES' if n_trainable == n_opt_params else 'NO'})")
+
     with open(log_path, "w", encoding="utf-8") as logf:
         for epoch in range(1, epochs + 1):
             model.train()
@@ -369,6 +501,41 @@ def train_model(dataset_path: str,
                 res = compute_loss(out, batch, weights, gen)
                 opt.zero_grad()
                 res["loss"].backward()
+
+                if debug_grad and nb < debug_batches:
+                    with torch.no_grad():
+                        logit = out["feas_logit"].detach()
+                        sp = out["score_pred"].detach()
+                        vpc = float(batch["node_mask"].sum(dim=1).float().mean().item())
+                        gnorms = _group_grad_norms(model)
+                        cur_lr = opt.param_groups[0]["lr"]
+                        logit_std = float(logit.std().item())
+                        gline = " ".join(f"{k}={v:.2e}" for k, v in sorted(gnorms.items()))
+                        print(f"[debug-grad] ep{epoch} b{nb} "
+                              f"node={tuple(batch['node_feat'].shape)} "
+                              f"valid_parts~{vpc:.2f} "
+                              f"logit(mean={logit.mean():.3f} std={logit_std:.3e} "
+                              f"min={logit.min():.3f} max={logit.max():.3f}) "
+                              f"score(mean={sp.mean():.3f} std={sp.std():.3e}) "
+                              f"lr={cur_lr:.2e}")
+                        print(f"[debug-grad] ep{epoch} b{nb} grad_norms: {gline}")
+                        if logit_std < 1e-5:
+                            print("[debug-grad] WARN: 同 batch logits std < 1e-5 "
+                                  "(输出近常数, 疑似 SAGPN 式退化)")
+                        main_keys = [k for k in gnorms
+                                     if any(t in k for t in
+                                            ("encoder", "trunk", "feas", "score",
+                                             "phi", "in_proj", "mp", "convs", "layers"))]
+                        main_zero = main_keys and all(gnorms[k] < 1e-12 for k in main_keys)
+                        if main_zero:
+                            zero_grad_streak += 1
+                        else:
+                            zero_grad_streak = 0
+                        if zero_grad_streak >= 5:
+                            raise RuntimeError(
+                                "[debug-grad] 主要分支 grad norm 连续 5 次为 0, "
+                                "训练链路断裂 (梯度未回传)。")
+
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 opt.step()
                 for k, v in res["logs"].items():
@@ -387,6 +554,7 @@ def train_model(dataset_path: str,
             history.append(row)
             line = (f"epoch {epoch:03d} | loss={ep_logs.get('total', 0):.4f} "
                     f"cls={ep_logs.get('l_cls', 0):.4f} score={ep_logs.get('l_score', 0):.4f} "
+                    f"rank={ep_logs.get('l_rank', 0):.4f} fail={ep_logs.get('l_fail', 0):.4f} "
                     f"xy={ep_logs.get('l_xy', 0):.4f} st={ep_logs.get('l_station', 0):.4f} "
                     f"| roc={metrics['roc_auc']:.3f} pr={metrics['pr_auc']:.3f} "
                     f"rec@{topk}={metrics['recall_at_k']:.3f} "
@@ -404,18 +572,47 @@ def train_model(dataset_path: str,
                 best_epoch = epoch
                 best_metrics = dict(metrics)
                 since_improve = 0
-                torch.save({
+                ckpt_config = {
                     "model_name": model_name,
+                    "feature_version": feature_version,
+                    "split_mode": split_mode,
+                    "training_seed": seed,
+                    "hidden_dim": int((model_kwargs or {}).get("hidden", 64)),
+                    "dropout": float((model_kwargs or {}).get("dropout", 0.2)),
+                    "rank_weight": float(weights.rank_weight),
+                    "fail_weight": float(weights.fail_weight),
+                    "use_focal": bool(weights.use_focal),
+                    "focal_gamma": float(weights.focal_gamma),
+                    "dataset_path": os.path.abspath(dataset_path),
+                    "dataset_sample_count": len(samples),
+                    "n_train": len(train_idx),
+                    "n_val": len(val_idx),
+                    "best_epoch": epoch,
+                    "best_metric": float(sel),
+                    "select_metric": early_stop_metric,
+                    "git_commit": _git_commit(),
                     "model_kwargs": model_kwargs or {},
+                    "lr": lr,
+                    "weight_decay": weight_decay,
+                    "batch_size": batch_size,
+                    "topk": topk,
+                    "epochs": epochs,
+                    "early_stop_patience": early_stop_patience,
+                    "effective_pos_weight": float(weights.pos_weight),
+                    "n_params": n_params,
+                }
+                torch.save({
+                    **ckpt_config,
                     "state_dict": model.state_dict(),
                     "flat_dim": flat_dim,
                     "max_parts": max_parts,
-                    "feature_version": feature_version,
                     "is_generator": gen,
                     "epoch": epoch,
-                    "select_metric": early_stop_metric,
                     "metric": float(sel),
                     "metrics": metrics,
+                    "requested_pos_weight": requested_pos_weight,
+                    "train_positive_count": int(n_pos),
+                    "train_negative_count": int(n_neg),
                 }, best_path)
             else:
                 since_improve += 1
@@ -428,6 +625,56 @@ def train_model(dataset_path: str,
                 logf.write(f"[early stop] epoch {epoch}, best={best_metric:.4f} @ {best_epoch}\n")
                 break
 
+    wall_time_s = time.time() - t0
+    sample_ids = [s.get("sample_id", i) for i, s in enumerate(samples)]
+    config_payload = {
+        "model_name": model_name,
+        "feature_version": feature_version,
+        "split_mode": split_mode,
+        "training_seed": seed,
+        "hidden_dim": int((model_kwargs or {}).get("hidden", 64)),
+        "dropout": float((model_kwargs or {}).get("dropout", 0.2)),
+        "rank_weight": float(weights.rank_weight),
+        "fail_weight": float(weights.fail_weight),
+        "use_focal": bool(weights.use_focal),
+        "focal_gamma": float(weights.focal_gamma),
+        "dataset_path": os.path.abspath(dataset_path),
+        "dataset_sample_count": len(samples),
+        "n_train": len(train_idx),
+        "n_val": len(val_idx),
+        "best_epoch": best_epoch,
+        "best_metric": float(best_metric),
+        "select_metric": early_stop_metric,
+        "git_commit": _git_commit(),
+        "model_kwargs": model_kwargs or {},
+        "lr": lr,
+        "weight_decay": weight_decay,
+        "batch_size": batch_size,
+        "topk": topk,
+        "epochs": epochs,
+        "early_stop_patience": early_stop_patience,
+        "effective_pos_weight": float(weights.pos_weight),
+        "n_params": n_params,
+        "checkpoint_path": best_path,
+    }
+    metrics_payload = {
+        "best_epoch": best_epoch,
+        "best_metric": float(best_metric),
+        "select_metric": early_stop_metric,
+        "wall_time_s": wall_time_s,
+        "n_params": n_params,
+        **{k: float(v) if v is not None and not (isinstance(v, float) and np.isnan(v))
+           else None for k, v in best_metrics.items()},
+    }
+    _save_training_artifacts(
+        save_dir, model_name,
+        config=config_payload,
+        metrics=metrics_payload,
+        history=history,
+        train_indices=train_idx,
+        val_indices=val_idx,
+        sample_ids=sample_ids,
+    )
     summary = {
         "model_name": model_name,
         "select_metric": early_stop_metric,
@@ -440,7 +687,13 @@ def train_model(dataset_path: str,
         "n_train": len(train_idx),
         "n_val": len(val_idx),
         "train_feasible_rate": (n_pos / max(len(train_idx), 1)),
-        "wall_time_s": time.time() - t0,
+        "train_positive_count": int(n_pos),
+        "train_negative_count": int(n_neg),
+        "requested_pos_weight": requested_pos_weight,
+        "effective_pos_weight": float(weights.pos_weight),
+        "n_params": n_params,
+        "wall_time_s": wall_time_s,
+        "config": config_payload,
         "final_metrics": history[-1] if history else {},
         "history": history,
     }

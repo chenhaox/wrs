@@ -1,50 +1,17 @@
-"""全局布局搜索 (Global Layout Search).
+"""塔式装配初始布局的全局搜索。
 
-目的
-----
-现有 NSGA-II (find_optimal_initial_layout_tower_nsga2_v1) 在很小的评估预算下
-基本等价于"随机采样 + 极小幅局部变异", 桌面这么大的连续 XY 空间根本没被充分
-覆盖, 所以经常"更好分数的位置没被找到"。
+搜索分为两步：
+1. 在各装配区域内采样无碰撞布局，保留得分较高的候选；
+2. 对候选布局逐零件调整 XY 位置，并用逐级减小的步长做局部优化。
 
-本脚本在 **完全不改动现有脚本** 的前提下, 换一套更"全局 + 精细"的搜索算法:
+布局评估、缓存、区域处理和 L3 验证沿用 NSGA2LayoutSearcher。
 
-  Phase A — 空间填充式全局探索 (explore)
-      对全部装配区(3x3 中心)做 round-robin 覆盖, 每个区都用现成的
-      sample_collision_free_xy 采样若干个无碰撞初始布局并评估, 取分数最高的
-      若干个作为精修种子。这样保证每个装配中心、整张桌面都被均匀采到,
-      而不是像 NSGA 那样随机挑区、样本全挤在少数区域。
-
-  Phase B — 模式搜索式局部精修 (pattern / coordinate refine)
-      对每个精英布局, 逐零件在 XY 上按"由粗到细"的步长(如 3cm->1.5cm->...)
-      尝试 ±步长 的邻域, 贪心接受能提升分数的移动, 直到某一轮不再改进。
-      这一步专门把"NSGA 随机变异错过的、附近更优的位置"抠出来 —— 也就是
-      你要的"更精细"。
-
-实现方式
---------
-直接复用 NSGA2LayoutSearcher (它已经封装好 evaluate_layout 调用、评估缓存、
-装配区处理、目标向量、L3 钩子)。本脚本只替换 random_search 这一个方法,
-因此所有约束、打分项、抓取校验、障碍口径都与现有流程 **完全一致**。
-
-用法
-----
+示例：
 python -m sealp.examples.layout.find_optimal_initial_layout_tower_global \
     --n-samples 60 --cdprim-type box --output-name tower_global \
     --global-explore 60 --global-elite 3 \
     --global-refine-steps 0.03,0.015,0.008 --global-refine-rounds 2 \
     --global-max-evals 300
-
-说明:
-  --n-samples          兼容 fol 主流程; 若未单独给 --global-explore, 则用它做探索样本数。
-  --global-explore N   Phase A 探索评估次数(覆盖全部装配区)。
-  --global-elite K     取分数最高的 K 个布局进入 Phase B 精修。
-  --global-refine-steps  精修步长(米), 逗号分隔, 由大到小。
-  --global-refine-rounds 每个步长最多扫描几轮(某轮无改进即提前进入更小步长)。
-  --global-refine-diagonal 额外尝试 4 个对角方向(更细但更慢)。
-  --global-max-evals M   evaluate_layout 总次数硬上限(强烈建议设置; 每次约 30~100s)。
-
-其余参数(--asmdef/--config/--grasp-dir/--planner-obstacle-mode/--enable-l3/
---w-stl-upface 等) 全部与 find_optimal_initial_layout_tower_strict_pycharm 一致。
 """
 
 from __future__ import annotations
@@ -56,26 +23,27 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-# 让 `python -m ...` 运行时也能 import 同目录的兄弟模块(与 nsga2_v1 一致)。
+# 支持以模块方式运行。
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-import find_optimal_initial_layout_tower_strict_pycharm as fol
-import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
+import find_optimal_initial_layout_tower_strict as fol
+import find_optimal_initial_layout_tower_strict_fast as fast
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2
 
 LayoutCandidate = fol.LayoutCandidate
 
 
-# 全局搜索配置(可被 --global-* 覆盖)
+# 全局搜索参数，可由命令行覆盖。
 GCFG: Dict[str, object] = {
-    "explore": None,             # Phase A 探索样本数; None -> 用 --n-samples
-    "elite": 3,                  # 进入精修的精英数
-    "refine_steps": [0.03, 0.015, 0.008],  # 精修步长(米), 由粗到细
-    "refine_rounds": 2,          # 每个步长最多扫描轮数
-    "refine_diagonal": False,    # 是否额外尝试对角方向
-    "max_resample_layout": 80,   # 单个布局无碰撞采样的最大重试次数
+    "explore": None,             # 探索次数，None 时使用 --n-samples。
+    "elite": 3,                  # 进入局部优化的候选数。
+    "refine_steps": [0.03, 0.015, 0.008],  # XY 优化步长，单位 m。
+    "refine_rounds": 2,          # 每个步长的最大扫描轮数。
+    "refine_diagonal": False,    # 是否检查对角方向。
+    "refine_enabled": True,      # 使用 --no-refine 可关闭。
+    "max_resample_layout": 80,   # 单个布局的最大重采样次数。
 }
 
 
@@ -87,12 +55,9 @@ def _offsets(step: float, diagonal: bool) -> List[Tuple[float, float]]:
 
 
 class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
-    """全局探索 + 局部精修搜索器。
+    """全局采样与局部坐标优化。"""
 
-    复用 NSGA2LayoutSearcher 的 evaluate/cache/region/L3 逻辑, 只换 random_search。
-    """
-
-    # ---------- Phase A: 全局探索 ----------
+    # 全局采样
     def _global_explore(self,
                         rng: np.random.Generator,
                         regions: Sequence[Tuple[str, Tuple[int, int], np.ndarray]],
@@ -108,7 +73,7 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
                 print("[global] explore 停止: 达到 --global-max-evals。")
                 break
             attempts += 1
-            # round-robin 覆盖每个装配区, 保证全桌面/全装配中心均匀采样。
+            # 按顺序轮询各装配区域。
             region = regions[i % len(regions)]
             i += 1
             self._set_region_from_tuple(region)
@@ -132,7 +97,7 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
                 feasible.append(cand)
         return feasible
 
-    # ---------- Phase B: 局部模式搜索精修 ----------
+    # 局部坐标优化
     def _pattern_refine(self,
                         cand: LayoutCandidate,
                         steps: Sequence[float],
@@ -175,29 +140,20 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
                             anchor = np.asarray(best_xy[pid], dtype=float)
                             improved = True
                 if not improved:
-                    break  # 该步长已收敛, 进入更小步长
+                    break  # 当前步长没有改进。
         if verbose:
             print(f"[refine] region={best.assembly_region_id} "
                   f"score {float(cand.layout_score):.4f} -> {float(best.layout_score):.4f} "
                   f"(+{total_improved:.4f})")
         return best
 
-    # ---------- 装配区扫描顺序: 中间优先 ----------
+    # 装配区域排序
     def _order_regions_center_first(
         self,
         regions: Sequence[Tuple[str, Tuple[int, int], np.ndarray]],
         verbose: bool = True,
     ) -> List[Tuple[str, Tuple[int, int], np.ndarray]]:
-        """把装配区候选按"离工作区中心由近到远"排序, 让探索优先扫描中间区域。
-
-        与网格划分方式无关: 只用每个候选中心的 (x, y) 到参考中心的距离排序,
-        因此即使以后不再是 3x3 网格(改成任意点集/更细网格/非均匀采样)也照样
-        "中间优先, 逐步向外", 而不是从某个角落开始。
-
-        参考中心:
-            y -> 左右臂基座 y 的中点(双臂可达性最佳的 y 带; 取不到则退回候选 y 均值);
-            x -> 所有候选中心 x 的均值(桌面前后方向的几何中点)。
-        """
+        """按候选区域到工作区参考中心的距离排序。"""
         regions = list(regions)
         if len(regions) <= 1:
             return regions
@@ -212,7 +168,7 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
         ref = np.array([ref_x, ref_y], dtype=float)
 
         d2 = np.sum((pts - ref) ** 2, axis=1)
-        # 距离相同(如对称角落)时按原顺序稳定排序, 保证结果可复现。
+        # 距离相同时保留原顺序。
         order = sorted(range(len(regions)), key=lambda i: (float(d2[i]), i))
         ordered = [regions[i] for i in order]
 
@@ -227,7 +183,7 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
                       f"dist={float(np.sqrt(d2[i])):.4f}")
         return ordered
 
-    # ---------- 主入口: 替换 NSGA 的 random_search ----------
+    # 搜索入口
     def random_search(self,
                       n_samples: int,
                       seed: int,
@@ -238,9 +194,9 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
                       l3_obstacle_mode: str = "staging_aware",
                       require_l3: bool = True) -> Optional[LayoutCandidate]:
         rng = np.random.default_rng(seed)
+        self._reset_eval_progress_stats()
         regions = self._assembly_region_candidates()
-        # 中间优先: 让 round-robin 从最靠工作区中心的装配区开始扫, 角落最后扫,
-        # 避免前几次评估浪费在难摆/够不到的角落上。
+        # 优先检查靠近工作区中心的区域。
         regions = self._order_regions_center_first(regions, verbose=verbose)
         GCFG["max_resample_layout"] = int(max_resample_layout)
 
@@ -249,19 +205,21 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
         steps = [float(s) for s in GCFG["refine_steps"]]  # type: ignore[union-attr]
         rounds = int(GCFG["refine_rounds"])
         diagonal = bool(GCFG["refine_diagonal"])
+        refine_enabled = bool(GCFG["refine_enabled"]) and len(steps) > 0 and rounds > 0
 
         print("\n========== Global Layout Search ==========")
         print(f"explore samples   = {n_explore}  (center-first round-robin over {len(regions)} assembly regions)")
         print(f"elite (refine)    = {elite_k}")
-        print(f"refine steps (m)  = {steps}")
-        print(f"refine rounds     = {rounds}, diagonal = {diagonal}")
+        print(f"refine enabled    = {refine_enabled}")
+        print(f"refine steps (m)  = {steps if refine_enabled else 'SKIPPED'}")
+        print(f"refine rounds     = {rounds if refine_enabled else 'SKIPPED'}, diagonal = {diagonal}")
         print(f"max_evals         = {nsga2._CFG.get('max_evals')}")
         print(f"objective         = analytic layout_score (与 nsga2 BEST-L2 同口径)")
         print(f"L3 default/current = {'ON' if enable_l3 else 'OFF'}")
 
         t0 = time.time()
 
-        # Phase A: 全局探索
+        # 全局采样
         print("\n---------- Phase A: global explore ----------")
         feasible = self._global_explore(rng, regions, n_explore, verbose)
         if not feasible:
@@ -273,18 +231,21 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
         for r, c in enumerate(elites[:elite_k], 1):
             print(f"  elite#{r} score={c.layout_score:.4f} region={c.assembly_region_id}")
 
-        # Phase B: 对每个精英做局部精修
-        print("\n---------- Phase B: pattern refine ----------")
+        # 对高分候选做局部优化。
         refined: List[LayoutCandidate] = []
-        for r, c in enumerate(elites[:elite_k], 1):
-            if self._eval_budget_exhausted():
-                print("[global] 精修阶段停止: 达到 --global-max-evals。")
-                refined.append(c)
-                continue
-            print(f"[refine] elite#{r} (start score={c.layout_score:.4f}) ...")
-            refined.append(self._pattern_refine(c, steps, rounds, diagonal, verbose))
+        if refine_enabled:
+            print("\n---------- Phase B: pattern refine ----------")
+            for r, c in enumerate(elites[:elite_k], 1):
+                if self._eval_budget_exhausted():
+                    print("[global] 精修阶段停止: 达到 --global-max-evals。")
+                    refined.append(c)
+                    continue
+                print(f"[refine] elite#{r} (start score={c.layout_score:.4f}) ...")
+                refined.append(self._pattern_refine(c, steps, rounds, diagonal, verbose))
+        else:
+            print("\n---------- Phase B: SKIPPED (--no-refine) ----------")
 
-        # 汇总所有候选(探索可行 + 精修结果), 取分数最高。
+        # 合并候选并选择最高分布局。
         pool = list(feasible) + list(refined)
         pool = [c for c in pool if bool(getattr(c, "l2_pass", False))]
         all_elites = self._unique_elites(pool, limit=max(int(GCFG["elite"]), int(l3_top_k)))
@@ -299,13 +260,14 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
         print(f"real evaluations    = {self._nsga_eval_count}")
         print(f"eval cache hits     = {self._nsga_cache_hits}")
         print(f"feasible found      = {len(feasible)}")
+        self.print_search_eval_progress()
         print(f"[BEST-L2] score={best.layout_score:.4f} region={best.assembly_region_id} rc={best.assembly_region_rc}")
         print(f"  objectives  ={np.round(getattr(best, '_nsga_objectives', []), 4).tolist()}")
         print(f"  grasp_counts={best.grasp_counts}")
         print(f"  arm_choice  ={best.arm_choice}")
         print(f"  pose_tag    ={best.pose_tag}")
 
-        # 可选 L3 验证(与 nsga2 同口径; 默认 OFF)
+        # 可选的完整序列验证。
         if enable_l3:
             print("\n========== Optional L3 full-process validation ==========")
             k = min(int(l3_top_k), len(elites_by_score))
@@ -323,9 +285,7 @@ class GlobalLayoutSearcher(nsga2.NSGA2LayoutSearcher):
         return best
 
 
-# ============================================================
-# Entry point
-# ============================================================
+# 命令行入口
 
 def _consume_global_args() -> None:
     v = fast._consume_extra_value("--global-explore")
@@ -339,10 +299,14 @@ def _consume_global_args() -> None:
         GCFG["refine_rounds"] = int(v)
     v = fast._consume_extra_value("--global-refine-steps")
     if v is not None:
-        try:
-            GCFG["refine_steps"] = [float(s) for s in v.replace(",", " ").split()]
-        except ValueError:
-            print(f"[global] WARN: 无法解析 --global-refine-steps '{v}', 保留默认。")
+        v_norm = str(v).strip().lower()
+        if v_norm in ("none", "off", "skip", "0"):
+            GCFG["refine_enabled"] = False
+        else:
+            try:
+                GCFG["refine_steps"] = [float(s) for s in v.replace(",", " ").split()]
+            except ValueError:
+                print(f"[global] WARN: 无法解析 --global-refine-steps '{v}', 保留默认。")
     v = fast._consume_extra_value("--global-max-evals")
     if v is not None:
         try:
@@ -351,6 +315,8 @@ def _consume_global_args() -> None:
             print(f"[global] WARN: 无法解析 --global-max-evals '{v}', 忽略。")
     if fast._consume_extra_flag("--global-refine-diagonal"):
         GCFG["refine_diagonal"] = True
+    if fast._consume_extra_flag("--no-refine"):
+        GCFG["refine_enabled"] = False
 
 
 def _patch_module() -> None:
@@ -358,7 +324,7 @@ def _patch_module() -> None:
 
 
 def main() -> None:
-    # L3 默认关闭 + 默认跳过 middle_plate 的 L3, 与 nsga2 行为一致。
+    # L3 默认设置与 NSGA-II 脚本保持一致。
     nsga2._enforce_l3_default_off()
     nsga2._enforce_l3_skip_middle_plate()
     _consume_global_args()

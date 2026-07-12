@@ -21,7 +21,7 @@
 6. 保存综合得分最高的 layout，供后续执行脚本使用.
 
 推荐放置：
-    sealp/examples/layout/find_optimal_initial_layout_tower_strict_pycharm.py
+    sealp/examples/layout/find_optimal_initial_layout_tower_strict.py
 
 PyCharm 右键运行：
     不需要填写任何参数，默认读取当前 Tower 的 asmdef / sample_config / tower_grasp，
@@ -199,9 +199,9 @@ DEFAULT_L2_PICK_CHECK_TILT = 0.35
 DEFAULT_ROBOT_HOME_CLEARANCE = 0.03
 
 DEFAULT_W_GRASP = 0.3
-DEFAULT_W_MANIP = 0.3
-DEFAULT_W_DIST = 0.15
-DEFAULT_W_ROT = 0.25
+DEFAULT_W_MANIP = 0.4
+DEFAULT_W_DIST = 0.1
+DEFAULT_W_ROT = 0.2
 
 
 # ============================================================
@@ -3194,6 +3194,8 @@ class WeightedInitialLayoutSearcher:
                 for k, R in layout.chosen_rotmat.items()
             },
         }
+        if hasattr(self, "search_eval_stats"):
+            debug["search_eval_stats"] = self.search_eval_stats()
         with open(debug_path, "w", encoding="utf-8") as f:
             json.dump(debug, f, ensure_ascii=False, indent=2)
         print(f"[OK] 保存 debug -> {debug_path}")

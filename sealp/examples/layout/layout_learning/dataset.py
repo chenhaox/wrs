@@ -51,6 +51,9 @@ def sample_to_item(sample: Dict, max_parts: int = F.MAX_PARTS_DEFAULT,
         "region_target": np.int64(min(int(tgt["region_target"]), F.MAX_REGIONS - 1)),
         "region_center": F._region_center(sample).astype(np.float32),
         "table_bounds": np.asarray(bounds, dtype=np.float32),
+        # ---- seqrel 辅助字段 (其它模型忽略) ----
+        "fail_class": np.int64(F.fail_reason_class(sample)),
+        "group_key": F.ranking_group_key(sample),
     }
 
 
@@ -102,6 +105,16 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
                 adj[b, u, v] = 1.0
                 edge_attr[b, u, v] = ef[e]
 
+    # ---- seqrel 辅助: fail 类别 + pair-ranking 分组 id (可选字段) ----
+    fail_class = np.stack([it.get("fail_class", np.int64(-1)) for it in items]).astype(np.int64)
+    group_keys = [it.get("group_key", str(b)) for b, it in enumerate(items)]
+    key_to_id: Dict[str, int] = {}
+    group_id = np.zeros(B, dtype=np.int64)
+    for b, key in enumerate(group_keys):
+        if key not in key_to_id:
+            key_to_id[key] = len(key_to_id)
+        group_id[b] = key_to_id[key]
+
     batch = {
         "flat_feat": torch.from_numpy(np.stack([it["flat"] for it in items])),
         "node_feat": torch.from_numpy(node),
@@ -120,6 +133,8 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
         "region_target": torch.from_numpy(np.stack([it["region_target"] for it in items])),
         "region_center": torch.from_numpy(np.stack([it["region_center"] for it in items])),
         "table_bounds": torch.from_numpy(np.stack([it["table_bounds"] for it in items])),
+        "fail_class": torch.from_numpy(fail_class),
+        "group_id": torch.from_numpy(group_id),
     }
     return batch
 

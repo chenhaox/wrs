@@ -50,9 +50,9 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 # Reuse the original CLI / saving logic and the accelerated evaluator.
-import find_optimal_initial_layout_tower_strict_pycharm as fol
-import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
-from find_optimal_initial_layout_tower_strict_pycharm import LayoutCandidate
+import find_optimal_initial_layout_tower_strict as fol
+import find_optimal_initial_layout_tower_strict_fast as fast
+from find_optimal_initial_layout_tower_strict import LayoutCandidate
 
 
 # ============================================================
@@ -151,6 +151,45 @@ class NSGA2LayoutSearcher(fast.FastWeightedInitialLayoutSearcher):
         self._nsga_eval_cache: Dict[Tuple, LayoutCandidate] = {}
         self._nsga_eval_count = 0
         self._nsga_cache_hits = 0
+        self._reset_eval_progress_stats()
+
+    def _reset_eval_progress_stats(self) -> None:
+        """Track when first feasible / best L2 score appear (by real eval index)."""
+        self._first_l2_ok_eval: Optional[int] = None
+        self._best_score_eval: Optional[int] = None
+        self._best_score_seen: float = -math.inf
+
+    def _note_eval_outcome(self, cand: LayoutCandidate) -> None:
+        if not bool(getattr(cand, "l2_pass", False)):
+            return
+        idx = int(self._nsga_eval_count)
+        if self._first_l2_ok_eval is None:
+            self._first_l2_ok_eval = idx
+        score = _safe_float(getattr(cand, "layout_score", -math.inf), -math.inf)
+        if score > float(self._best_score_seen) + 1e-6:
+            self._best_score_seen = score
+            self._best_score_eval = idx
+
+    def search_eval_stats(self) -> Dict[str, Optional[float]]:
+        return {
+            "real_evals": int(self._nsga_eval_count),
+            "cache_hits": int(self._nsga_cache_hits),
+            "first_l2_ok_eval": self._first_l2_ok_eval,
+            "best_score_eval": self._best_score_eval,
+            "best_score_seen_during_search": (
+                float(self._best_score_seen) if self._best_score_seen > -math.inf else None
+            ),
+        }
+
+    def print_search_eval_progress(self) -> None:
+        st = self.search_eval_stats()
+        print(f"first L2_OK at eval # = {st['first_l2_ok_eval']}")
+        bse = st["best_score_eval"]
+        bss = st["best_score_seen_during_search"]
+        if bse is not None and bss is not None:
+            print(f"best score first at  = #{bse}  (score={bss:.4f})")
+        else:
+            print(f"best score first at  = {bse}")
 
     def _eval_budget_exhausted(self) -> bool:
         max_evals = _CFG.get("max_evals", None)
@@ -226,6 +265,7 @@ class NSGA2LayoutSearcher(fast.FastWeightedInitialLayoutSearcher):
         cand.l2_pass = ok
         cand._nsga_objectives = self._objectives_from_candidate(cand)  # type: ignore[attr-defined]
         cand._nsga_region_tuple = region  # type: ignore[attr-defined]
+        self._note_eval_outcome(cand)
 
         # Store a clone so later rank/crowding annotations do not pollute the cache.
         self._nsga_eval_cache[key] = _clone_candidate(cand)
@@ -508,6 +548,7 @@ class NSGA2LayoutSearcher(fast.FastWeightedInitialLayoutSearcher):
                       l3_obstacle_mode: str = "staging_aware",
                       require_l3: bool = True) -> Optional[LayoutCandidate]:
         rng = np.random.default_rng(seed)
+        self._reset_eval_progress_stats()
         regions = self._assembly_region_candidates()
 
         pop_size = int(_CFG["pop"] or n_samples)
@@ -584,6 +625,7 @@ class NSGA2LayoutSearcher(fast.FastWeightedInitialLayoutSearcher):
         print(f"unique L2 elites    = {len(elites)}")
         print(f"real evaluations    = {self._nsga_eval_count}")
         print(f"eval cache hits     = {self._nsga_cache_hits}")
+        self.print_search_eval_progress()
         print(f"[BEST-L2] score={best.layout_score:.4f} region={best.assembly_region_id} rc={best.assembly_region_rc}")
         print(f"  objectives  ={np.round(best._nsga_objectives, 4).tolist()}")
         print(f"  grasp_counts={best.grasp_counts}")

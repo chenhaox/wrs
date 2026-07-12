@@ -52,6 +52,22 @@ _METRICS = ["roc_auc", "pr_auc", "recall_at_k", "precision_at_k",
             "score_spearman", "composite"]
 
 
+def _parse_pos_weight(spec: str):
+    """解析 --pos-weight: 'auto' 或正浮点数。"""
+    text = str(spec).strip()
+    if text.lower() == "auto":
+        return "auto"
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--pos-weight 必须是 'auto' 或正浮点数，例如 2.5"
+        ) from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("--pos-weight 必须大于 0")
+    return value
+
+
 def _parse_args():
     p = argparse.ArgumentParser(description="Offline generalization experiments")
     p.add_argument("--dataset", required=True)
@@ -66,7 +82,9 @@ def _parse_args():
     p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--pos-weight", type=float, default=4.0)
+    p.add_argument(
+        "--pos-weight", type=_parse_pos_weight, default="auto",
+        help="'auto'=按每个训练 split 的 neg/pos 自动计算，或指定正浮点数")
     p.add_argument("--score-threshold", default="quantile:0.70")
     p.add_argument("--topk", type=int, default=10)
     p.add_argument("--early-stop-patience", type=int, default=30)
@@ -101,7 +119,8 @@ def main():
             print("=" * 72)
             print(f"[gen-exp] model={model} split={split} feature={args.feature_version}")
             print("=" * 72)
-            weights = LossWeights(pos_weight=args.pos_weight, score_threshold=abs_thr)
+            initial_pos_weight = 1.0 if args.pos_weight == "auto" else float(args.pos_weight)
+            weights = LossWeights(pos_weight=initial_pos_weight, score_threshold=abs_thr)
             summary = train_model(
                 dataset_path=args.dataset,
                 model_name=model,
@@ -112,6 +131,7 @@ def main():
                 seed=args.seed,
                 device=args.device,
                 loss_weights=weights,
+                pos_weight=args.pos_weight,
                 model_kwargs=mkwargs,
                 topk=args.topk,
                 split_mode=split,
@@ -130,6 +150,9 @@ def main():
                 "n_train": summary.get("n_train"),
                 "n_val": summary.get("n_val"),
                 "train_feasible_rate": round(summary.get("train_feasible_rate", 0.0), 4),
+                "train_positive_count": summary.get("train_positive_count"),
+                "train_negative_count": summary.get("train_negative_count"),
+                "effective_pos_weight": round(float(summary.get("effective_pos_weight", 0.0)), 4),
                 "best_epoch": summary.get("best_epoch"),
                 "checkpoint_path": summary.get("best_path"),
             }
@@ -151,7 +174,8 @@ def main():
     # 写 CSV
     out_csv = os.path.join(args.results_dir, "generalization_summary.csv")
     fieldnames = (["model", "split_mode", "feature_version", "n_train", "n_val",
-                   "train_feasible_rate", "best_epoch"] + _METRICS
+                   "train_feasible_rate", "train_positive_count", "train_negative_count",
+                   "effective_pos_weight", "best_epoch"] + _METRICS
                   + ["gap_roc_auc", "gap_pr_auc", "gap_recall_at_k", "gap_composite",
                      "checkpoint_path"])
     with open(out_csv, "w", newline="", encoding="utf-8-sig") as f:

@@ -90,7 +90,7 @@ if _HERE not in sys.path:
 
 import panthera_motor as pm  # noqa: E402
 
-# Optional: TOPPRA-based time-optimal interpolation (matches piper.py).
+# Optional: TOPPRA-based time-opF3_score_decompositiontimal interpolation (matches piper.py).
 try:
     import wrs.motion.trajectory.piecewisepoly_toppra as pwp  # type: ignore
 
