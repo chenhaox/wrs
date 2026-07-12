@@ -50,9 +50,9 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 # Reuse the original CLI / saving logic and the accelerated evaluator.
-import find_optimal_initial_layout_tower_strict as fol
-import find_optimal_initial_layout_tower_strict_fast as fast
-from find_optimal_initial_layout_tower_strict import LayoutCandidate
+import find_optimal_initial_layout_tower_strict_pycharm as fol
+import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
+from find_optimal_initial_layout_tower_strict_pycharm import LayoutCandidate
 
 
 # ============================================================

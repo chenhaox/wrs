@@ -20,6 +20,7 @@ from .pointnet_encoder import PointNetGeometry
 from .cvae_proposal import CVAEProposal
 from .diffusion_proposal import DiffusionProposal
 from .sagpn import SAGPN
+from .seqrel_layout_net import SeqRelLayoutNet
 
 # 名称 -> 构造器
 _REGISTRY = {
@@ -33,6 +34,7 @@ _REGISTRY = {
     "cvae": CVAEProposal,
     "diffusion": DiffusionProposal,
     "sagpn": SAGPN,
+    "seqrel": SeqRelLayoutNet,
 }
 
 MODEL_NAMES = list(_REGISTRY.keys())
@@ -46,6 +48,10 @@ _SIZE_PRESETS = {
     "sagpn": {
         "small": {"hidden": 48, "layers": 2, "dropout": 0.2},
         "base": {"hidden": 128, "layers": 3, "dropout": 0.1},
+    },
+    "seqrel": {
+        "small": {"hidden": 48, "layers": 2, "dropout": 0.2},
+        "base": {"hidden": 64, "layers": 2, "dropout": 0.15},
     },
     "cvae": {
         "small": {"hidden": 64, "dropout": 0.2},

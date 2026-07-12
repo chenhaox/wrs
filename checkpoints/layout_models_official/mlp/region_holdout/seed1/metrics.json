@@ -1,0 +1,21 @@
+{
+  "best_epoch": 55,
+  "best_metric": 0.47196044510576096,
+  "select_metric": "composite",
+  "wall_time_s": 152.8863935470581,
+  "n_params": 270594,
+  "feas_acc": 0.4027777777777778,
+  "auc": 0.5874384236453202,
+  "roc_auc": 0.5874384236453202,
+  "pr_auc": 0.4682934944472437,
+  "score_mae": 0.06434425711631775,
+  "score_rmse": 0.07235404849052429,
+  "score_spearman": 0.5604395604395604,
+  "topk_hit": 0.5,
+  "precision_at_k": 0.5,
+  "recall_at_k": 0.3571428656578064,
+  "topk_avg_true_score": 0.23564133048057556,
+  "topk_avg_score_norm": 0.6072811579278276,
+  "enrichment": 2.571428571428571,
+  "composite": 0.47196044510576096
+}

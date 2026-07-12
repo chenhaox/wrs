@@ -1,0 +1,21 @@
+{
+  "best_epoch": 28,
+  "best_metric_name": "composite",
+  "best_metric_value": 0.29786442378030564,
+  "training_time_seconds": 102.07507085800171,
+  "parameter_count": 66056,
+  "feas_acc": 0.5668604651162791,
+  "auc": 0.657172131147541,
+  "roc_auc": 0.657172131147541,
+  "pr_auc": 0.4166501185123053,
+  "score_mae": 0.06928865611553192,
+  "score_rmse": 0.08071041107177734,
+  "score_spearman": 0.15944794479447943,
+  "topk_hit": 0.4000000059604645,
+  "precision_at_k": 0.4000000059604645,
+  "recall_at_k": 0.03999999910593033,
+  "topk_avg_true_score": 0.2873910069465637,
+  "topk_avg_score_norm": 0.5162979108207822,
+  "enrichment": 1.3760000205039977,
+  "composite": 0.29786442378030564
+}

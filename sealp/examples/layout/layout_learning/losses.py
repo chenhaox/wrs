@@ -37,6 +37,7 @@ class LossWeights:
     rank_pairs_per_batch: int = 256   # 每个 batch 最多采样多少个排序对
     use_focal: bool = False         # L_cls 是否用 focal loss
     focal_gamma: float = 2.0        # focal loss 聚焦系数
+    focal_alpha: float = 0.25       # focal loss 正类权重 (metadata / 可选扩展)
 
 
 def _focal_bce(logit: torch.Tensor, target: torch.Tensor,

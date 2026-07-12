@@ -57,14 +57,6 @@ def _parse_args():
     p.add_argument("--methods", default="random,nsga2,global,mlp,gcn,gat,sagpn")
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--checkpoint-dir", default=os.path.join("checkpoints", "layout_models"))
-    p.add_argument("--checkpoint-map", default="",
-                   help="per-model checkpoint paths, e.g. mlp=path1,deepsets=path2,seqrel=path3")
-    p.add_argument("--mlp-checkpoint", default=None)
-    p.add_argument("--deepsets-checkpoint", default=None)
-    p.add_argument("--seqrel-checkpoint", default=None)
-    p.add_argument("--gcn-checkpoint", default=None)
-    p.add_argument("--gat-checkpoint", default=None)
-    p.add_argument("--sagpn-checkpoint", default=None)
     p.add_argument("--results-dir", default=os.path.join(_OUTPUT_DIR, "experiments"))
     p.add_argument("--python", default=sys.executable, help="运行子进程的解释器")
     p.add_argument("--common", default="", help="所有方法共享的透传 CLI 参数 (字符串)")
@@ -79,42 +71,7 @@ def _parse_args():
     return p.parse_args()
 
 
-def _resolve_checkpoint_map(args) -> Dict[str, str]:
-    """解析 checkpoint-map 与各 --{model}-checkpoint 参数。"""
-    ckpt: Dict[str, str] = {}
-    if args.checkpoint_map:
-        for part in args.checkpoint_map.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if "=" not in part:
-                raise ValueError(f"checkpoint-map 格式错误: '{part}', 应为 model=path")
-            name, path = part.split("=", 1)
-            ckpt[name.strip()] = os.path.abspath(path.strip())
-    for method in NN_METHODS:
-        val = getattr(args, f"{method}_checkpoint", None)
-        if val:
-            ckpt[method] = os.path.abspath(val)
-    return ckpt
-
-
-def _checkpoint_for_method(args, method: str, ckpt_map: Dict[str, str]) -> str:
-    if method in ckpt_map:
-        path = ckpt_map[method]
-    else:
-        path = os.path.join(args.checkpoint_dir, f"{method}_best.pt")
-        path = os.path.abspath(path)
-    if not os.path.isfile(path):
-        raise FileNotFoundError(
-            f"[exp] checkpoint 不存在: method={method} path={path}\n"
-            f"请用 --checkpoint-map 或 --{method}-checkpoint 指定正确路径。")
-    print(f"[exp] {method} checkpoint = {path}")
-    return path
-
-
-def _build_cmd(args, method: str, seed: int, out_name: str,
-               ckpt_map: Optional[Dict[str, str]] = None,
-               ckpt_path: Optional[str] = None) -> List[str]:
+def _build_cmd(args, method: str, seed: int, out_name: str) -> List[str]:
     py = args.python
     common = shlex.split(args.common)
     max_evals = str(args.max_evals)
@@ -131,8 +88,7 @@ def _build_cmd(args, method: str, seed: int, out_name: str,
                     "--global-refine-steps", args.global_refine_steps]
         # random(strict) 没有 eval 上限旋钮, 用 n-samples 控制评估次数
     elif method in NN_METHODS:
-        ckpt_map = ckpt_map or {}
-        ckpt = ckpt_path or _checkpoint_for_method(args, method, ckpt_map)
+        ckpt = os.path.join(args.checkpoint_dir, f"{method}_best.pt")
         cmd = base + [NEURAL_MODULE, "--model", method, "--checkpoint", ckpt,
                       "--output-name", out_name, "--seed", str(seed),
                       "--n-samples", str(args.n_samples),
@@ -199,12 +155,9 @@ def _metrics_from_debug(dbg: Dict) -> Dict[str, Optional[float]]:
     }
 
 
-def _run_one(args, method: str, seed: int, ckpt_map: Dict[str, str]) -> Dict:
+def _run_one(args, method: str, seed: int) -> Dict:
     out_name = f"exp_{method}_seed{seed}"
-    ckpt_path = ""
-    if method in NN_METHODS:
-        ckpt_path = _checkpoint_for_method(args, method, ckpt_map)
-    cmd = _build_cmd(args, method, seed, out_name, ckpt_map, ckpt_path)
+    cmd = _build_cmd(args, method, seed, out_name)
     log_dir = os.path.join(args.results_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{out_name}.log")
@@ -230,7 +183,6 @@ def _run_one(args, method: str, seed: int, ckpt_map: Dict[str, str]) -> Dict:
     row = {
         "method": method,
         "seed": seed,
-        "checkpoint_path": ckpt_path,
         "exit_code": proc.returncode,
         "runtime_s": round(parsed.get("wall_time") or dt, 2),
         "best_score": md["best_score"],
@@ -315,13 +267,12 @@ def main():
     args = _parse_args()
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     seeds = [int(s) for s in args.seeds.replace(",", " ").split()]
-    ckpt_map = _resolve_checkpoint_map(args)
     os.makedirs(args.results_dir, exist_ok=True)
 
     rows: List[Dict] = []
     for method in methods:
         for seed in seeds:
-            rows.append(_run_one(args, method, seed, ckpt_map))
+            rows.append(_run_one(args, method, seed))
 
     if args.dry_run:
         return
@@ -337,8 +288,7 @@ def main():
     summary = _aggregate(rows)
     summary_path = os.path.join(args.results_dir, "summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump({"checkpoint_map": ckpt_map, "summary": summary}, f,
-                  ensure_ascii=False, indent=2)
+        json.dump(summary, f, ensure_ascii=False, indent=2)
     print(f"[exp] summary -> {summary_path}")
 
     print("\n========== Summary ==========")

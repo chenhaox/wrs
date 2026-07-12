@@ -46,8 +46,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-import find_optimal_initial_layout_tower_strict as fol
-import find_optimal_initial_layout_tower_strict_fast as fast
+import find_optimal_initial_layout_tower_strict_pycharm as fol
+import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2
 import find_optimal_initial_layout_tower_global as gmod
 import generate_layout_dataset as gends

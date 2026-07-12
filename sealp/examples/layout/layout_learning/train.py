@@ -21,7 +21,7 @@ import json
 import os
 import subprocess
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -169,61 +169,6 @@ def evaluate(model, loader, device, gen: bool, topk: int = 10) -> Dict[str, floa
 
 
 # ------------------------------------------------------------
-# 实验元数据 / 保存
-# ------------------------------------------------------------
-
-def _git_commit() -> str:
-    """返回当前 git commit hash; 失败时返回 'unknown'。"""
-    try:
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=root, stderr=subprocess.DEVNULL, text=True)
-        return out.strip()
-    except Exception:
-        return "unknown"
-
-
-def experiment_save_dir(base_dir: str, model_name: str, split_mode: str,
-                        training_seed: int) -> str:
-    """规范实验目录: {base}/{model}/{split}/seed{N}/。"""
-    return os.path.join(base_dir, model_name, split_mode, f"seed{training_seed}")
-
-
-def _save_training_artifacts(save_dir: str, model_name: str, *,
-                             config: Dict, metrics: Dict, history: List[Dict],
-                             train_indices: List[int], val_indices: List[int],
-                             sample_ids: List) -> None:
-    """保存 config / metrics / history CSV / split indices; 复制 train.log。"""
-    os.makedirs(save_dir, exist_ok=True)
-    with open(os.path.join(save_dir, "config.json"), "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(save_dir, "metrics.json"), "w", encoding="utf-8") as f:
-        json.dump(metrics, f, ensure_ascii=False, indent=2)
-    split_payload = {
-        "train_indices": train_indices,
-        "val_indices": val_indices,
-        "train_sample_ids": [sample_ids[i] for i in train_indices],
-        "val_sample_ids": [sample_ids[i] for i in val_indices],
-    }
-    with open(os.path.join(save_dir, "split_indices.json"), "w", encoding="utf-8") as f:
-        json.dump(split_payload, f, ensure_ascii=False, indent=2)
-    if history:
-        hist_path = os.path.join(save_dir, "training_history.csv")
-        keys = list(history[0].keys())
-        with open(hist_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=keys)
-            w.writeheader()
-            for row in history:
-                w.writerow(row)
-    src_log = os.path.join(save_dir, f"{model_name}_train.log")
-    dst_log = os.path.join(save_dir, "train.log")
-    if os.path.isfile(src_log) and not os.path.isfile(dst_log):
-        with open(src_log, "r", encoding="utf-8") as sf, \
-             open(dst_log, "w", encoding="utf-8") as df:
-            df.write(sf.read())
-
-
-# ------------------------------------------------------------
 # train / val split
 # ------------------------------------------------------------
 
@@ -314,6 +259,78 @@ def _split_indices(samples: List[Dict], val_ratio: float, seed: int,
     return sorted(train), sorted(val)
 
 
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _load_split_indices(path: str) -> Tuple[List[int], List[int]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    train_idx = [int(i) for i in data["train_indices"]]
+    val_idx = [int(i) for i in data["val_indices"]]
+    if not train_idx or not val_idx:
+        raise ValueError(f"split_indices 无效 (空 train/val): {path}")
+    return train_idx, val_idx
+
+
+def _save_split_indices(path: str, train_idx: List[int], val_idx: List[int],
+                        meta: Optional[Dict[str, Any]] = None) -> None:
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    payload: Dict[str, Any] = {
+        "train_indices": sorted(int(i) for i in train_idx),
+        "val_indices": sorted(int(i) for i in val_idx),
+    }
+    if meta:
+        payload.update(meta)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _write_training_history_csv(path: str, history: List[Dict]) -> None:
+    if not history:
+        return
+    keys = list(history[0].keys())
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(history)
+
+
+def _model_hidden_dropout(model_name: str, model_kwargs: Optional[Dict]) -> Tuple[int, float]:
+    mk = model_kwargs or {}
+    defaults = {
+        "mlp": (128, 0.1),
+        "deepsets": (128, 0.1),
+        "seqrel": (64, 0.2),
+        "gcn": (128, 0.1),
+        "gat": (128, 0.1),
+        "sagpn": (128, 0.1),
+    }
+    d_hidden, d_drop = defaults.get(model_name, (128, 0.1))
+    return int(mk.get("hidden", d_hidden)), float(mk.get("dropout", d_drop))
+
+
+def resolve_run_dir(run_root: str, model_name: str, split_mode: str,
+                    seed: int) -> str:
+    """规范实验目录: {run_root}/{model}/{split_mode}/seed{N}/"""
+    return os.path.join(run_root, model_name, split_mode, f"seed{seed}")
+
+
+def resolve_shared_split_path(run_root: str, split_mode: str, seed: int) -> str:
+    """跨模型共享的 split 文件路径。"""
+    return os.path.join(run_root, "_splits", split_mode, f"seed{seed}",
+                        "split_indices.json")
+
+
 # ------------------------------------------------------------
 # 训练
 # ------------------------------------------------------------
@@ -356,6 +373,10 @@ def train_model(dataset_path: str,
                 debug_batches: int = 3,
                 limit_samples: int = 0,
                 shuffle_labels: bool = False,
+                split_indices_path: Optional[str] = None,
+                shared_split_path: Optional[str] = None,
+                run_root: Optional[str] = None,
+                code_version: str = "seqrel-v2-repro",
                 verbose: bool = True) -> Dict:
     os.makedirs(save_dir, exist_ok=True)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -392,9 +413,42 @@ def train_model(dataset_path: str,
             print("[train] shuffle_labels=True -> 标签已随机置换 (sanity check)")
     ds = LayoutDataset(samples, max_parts=max_parts, feature_version=feature_version)
 
-    train_idx, val_idx = _split_indices(samples, val_ratio, seed, split_mode,
-                                        region_holdout_mode=region_holdout_mode,
-                                        xy_grid=region_xy_grid)
+    split_meta = {
+        "split_mode": split_mode,
+        "training_seed": seed,
+        "val_ratio": val_ratio,
+        "dataset_path": os.path.abspath(dataset_path),
+        "dataset_sample_count": len(samples),
+        "feature_version": feature_version,
+    }
+    split_source = "computed"
+    if split_indices_path:
+        if not os.path.isfile(split_indices_path):
+            raise FileNotFoundError(
+                f"--split-indices 指定文件不存在: {split_indices_path}")
+        train_idx, val_idx = _load_split_indices(split_indices_path)
+        split_source = split_indices_path
+        if verbose:
+            print(f"[train] 使用指定 split: {split_indices_path} "
+                  f"(train={len(train_idx)} val={len(val_idx)})")
+    elif shared_split_path and os.path.isfile(shared_split_path):
+        train_idx, val_idx = _load_split_indices(shared_split_path)
+        split_source = shared_split_path
+        if verbose:
+            print(f"[train] 使用共享 split: {shared_split_path} "
+                  f"(train={len(train_idx)} val={len(val_idx)})")
+    else:
+        train_idx, val_idx = _split_indices(samples, val_ratio, seed, split_mode,
+                                            region_holdout_mode=region_holdout_mode,
+                                            xy_grid=region_xy_grid)
+        if shared_split_path:
+            _save_split_indices(shared_split_path, train_idx, val_idx, split_meta)
+            split_source = shared_split_path
+            if verbose:
+                print(f"[train] 已写入共享 split -> {shared_split_path}")
+    _save_split_indices(os.path.join(save_dir, "split_indices.json"),
+                        train_idx, val_idx,
+                        {**split_meta, "source": split_source})
     train_ds, val_ds = Subset(ds, train_idx), Subset(ds, val_idx)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
@@ -477,7 +531,8 @@ def train_model(dataset_path: str,
     best_epoch = 0
     best_metrics: Dict[str, float] = {}
     best_path = os.path.join(save_dir, f"{model_name}_best.pt")
-    log_path = os.path.join(save_dir, f"{model_name}_train.log")
+    log_path = os.path.join(save_dir, "train.log")
+    legacy_log_path = os.path.join(save_dir, f"{model_name}_train.log")
     history: List[Dict] = []
     since_improve = 0
     t0 = time.time()
@@ -489,6 +544,85 @@ def train_model(dataset_path: str,
         print(f"[debug-grad] trainable_params={n_trainable:,} "
               f"optimizer_params={n_opt_params:,} "
               f"(match={'YES' if n_trainable == n_opt_params else 'NO'})")
+
+    hidden_dim, dropout = _model_hidden_dropout(model_name, model_kwargs)
+    git_commit = _git_commit()
+    n_params = sum(p.numel() for p in model.parameters())
+    abs_dataset = os.path.abspath(dataset_path)
+    abs_save_dir = os.path.abspath(save_dir)
+    abs_best_path = os.path.join(abs_save_dir, f"{model_name}_best.pt")
+
+    def _run_config(best_ep: int = 0, best_val: float = float("nan"),
+                    best_m: Optional[Dict] = None,
+                    wall_s: float = 0.0) -> Dict[str, Any]:
+        w = weights
+        disable_relation = bool((model_kwargs or {}).get("disable_relation", False))
+        disable_sequence = bool((model_kwargs or {}).get("disable_sequence", False))
+        relation_variant = (
+            "no_relation" if disable_relation
+            else "no_sequence" if disable_sequence
+            else "full"
+        )
+        return {
+            "model_name": model_name,
+            "feature_version": feature_version,
+            "split_mode": split_mode,
+            "training_seed": seed,
+            "hidden_dim": hidden_dim,
+            "dropout": dropout,
+            "disable_relation": disable_relation,
+            "disable_sequence": disable_sequence,
+            "relation_variant": relation_variant,
+            "score_weight": float(w.alpha),
+            "rank_weight": float(w.rank_weight),
+            "fail_weight": float(w.fail_weight),
+            "use_focal": bool(w.use_focal),
+            "focal_alpha": float(w.focal_alpha),
+            "focal_gamma": float(w.focal_gamma),
+            "learning_rate": float(lr),
+            "weight_decay": float(weight_decay),
+            "batch_size": int(batch_size),
+            "dataset_path": abs_dataset,
+            "dataset_sample_count": len(samples),
+            "train_count": len(train_idx),
+            "val_count": len(val_idx),
+            "best_epoch": int(best_ep),
+            "best_metric_name": early_stop_metric,
+            "best_metric_value": float(best_val),
+            "parameter_count": int(n_params),
+            "training_time_seconds": float(wall_s),
+            "git_commit": git_commit,
+            "code_version": code_version,
+            "checkpoint_path": abs_best_path,
+            "model_kwargs": model_kwargs or {},
+            "topk": int(topk),
+            "epochs": int(epochs),
+            "early_stop_patience": int(early_stop_patience),
+            "effective_pos_weight": float(w.pos_weight),
+            "split_indices_source": split_source,
+            "run_root": os.path.abspath(run_root) if run_root else None,
+            "best_metrics": best_m or {},
+        }
+
+    def _checkpoint_payload(epoch: int, sel: float, metrics: Dict[str, float]) -> Dict:
+        return {
+            "model_name": model_name,
+            "model_kwargs": model_kwargs or {},
+            "state_dict": model.state_dict(),
+            "flat_dim": flat_dim,
+            "max_parts": max_parts,
+            "feature_version": feature_version,
+            "is_generator": gen,
+            "epoch": epoch,
+            "select_metric": early_stop_metric,
+            "metric": float(sel),
+            "metrics": metrics,
+            "requested_pos_weight": requested_pos_weight,
+            "effective_pos_weight": float(weights.pos_weight),
+            "train_positive_count": int(n_pos),
+            "train_negative_count": int(n_neg),
+            **_run_config(epoch, sel, metrics, time.time() - t0),
+        }
 
     with open(log_path, "w", encoding="utf-8") as logf:
         for epoch in range(1, epochs + 1):
@@ -572,48 +706,7 @@ def train_model(dataset_path: str,
                 best_epoch = epoch
                 best_metrics = dict(metrics)
                 since_improve = 0
-                ckpt_config = {
-                    "model_name": model_name,
-                    "feature_version": feature_version,
-                    "split_mode": split_mode,
-                    "training_seed": seed,
-                    "hidden_dim": int((model_kwargs or {}).get("hidden", 64)),
-                    "dropout": float((model_kwargs or {}).get("dropout", 0.2)),
-                    "rank_weight": float(weights.rank_weight),
-                    "fail_weight": float(weights.fail_weight),
-                    "use_focal": bool(weights.use_focal),
-                    "focal_gamma": float(weights.focal_gamma),
-                    "dataset_path": os.path.abspath(dataset_path),
-                    "dataset_sample_count": len(samples),
-                    "n_train": len(train_idx),
-                    "n_val": len(val_idx),
-                    "best_epoch": epoch,
-                    "best_metric": float(sel),
-                    "select_metric": early_stop_metric,
-                    "git_commit": _git_commit(),
-                    "model_kwargs": model_kwargs or {},
-                    "lr": lr,
-                    "weight_decay": weight_decay,
-                    "batch_size": batch_size,
-                    "topk": topk,
-                    "epochs": epochs,
-                    "early_stop_patience": early_stop_patience,
-                    "effective_pos_weight": float(weights.pos_weight),
-                    "n_params": n_params,
-                }
-                torch.save({
-                    **ckpt_config,
-                    "state_dict": model.state_dict(),
-                    "flat_dim": flat_dim,
-                    "max_parts": max_parts,
-                    "is_generator": gen,
-                    "epoch": epoch,
-                    "metric": float(sel),
-                    "metrics": metrics,
-                    "requested_pos_weight": requested_pos_weight,
-                    "train_positive_count": int(n_pos),
-                    "train_negative_count": int(n_neg),
-                }, best_path)
+                torch.save(_checkpoint_payload(epoch, sel, metrics), best_path)
             else:
                 since_improve += 1
 
@@ -626,55 +719,33 @@ def train_model(dataset_path: str,
                 break
 
     wall_time_s = time.time() - t0
-    sample_ids = [s.get("sample_id", i) for i, s in enumerate(samples)]
-    config_payload = {
-        "model_name": model_name,
-        "feature_version": feature_version,
-        "split_mode": split_mode,
-        "training_seed": seed,
-        "hidden_dim": int((model_kwargs or {}).get("hidden", 64)),
-        "dropout": float((model_kwargs or {}).get("dropout", 0.2)),
-        "rank_weight": float(weights.rank_weight),
-        "fail_weight": float(weights.fail_weight),
-        "use_focal": bool(weights.use_focal),
-        "focal_gamma": float(weights.focal_gamma),
-        "dataset_path": os.path.abspath(dataset_path),
-        "dataset_sample_count": len(samples),
-        "n_train": len(train_idx),
-        "n_val": len(val_idx),
+    config = _run_config(best_epoch, best_metric, best_metrics, wall_time_s)
+    metrics_out = {
         "best_epoch": best_epoch,
-        "best_metric": float(best_metric),
-        "select_metric": early_stop_metric,
-        "git_commit": _git_commit(),
-        "model_kwargs": model_kwargs or {},
-        "lr": lr,
-        "weight_decay": weight_decay,
-        "batch_size": batch_size,
-        "topk": topk,
-        "epochs": epochs,
-        "early_stop_patience": early_stop_patience,
-        "effective_pos_weight": float(weights.pos_weight),
-        "n_params": n_params,
-        "checkpoint_path": best_path,
+        "best_metric_name": early_stop_metric,
+        "best_metric_value": float(best_metric),
+        "training_time_seconds": wall_time_s,
+        "parameter_count": int(n_params),
+        **best_metrics,
     }
-    metrics_payload = {
-        "best_epoch": best_epoch,
-        "best_metric": float(best_metric),
-        "select_metric": early_stop_metric,
-        "wall_time_s": wall_time_s,
-        "n_params": n_params,
-        **{k: float(v) if v is not None and not (isinstance(v, float) and np.isnan(v))
-           else None for k, v in best_metrics.items()},
-    }
-    _save_training_artifacts(
-        save_dir, model_name,
-        config=config_payload,
-        metrics=metrics_payload,
-        history=history,
-        train_indices=train_idx,
-        val_indices=val_idx,
-        sample_ids=sample_ids,
-    )
+    with open(os.path.join(save_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(save_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        json.dump(metrics_out, f, ensure_ascii=False, indent=2)
+    _write_training_history_csv(os.path.join(save_dir, "training_history.csv"), history)
+    # 向后兼容: 保留旧命名日志副本
+    try:
+        with open(log_path, "r", encoding="utf-8") as src, \
+                open(legacy_log_path, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
+    except OSError:
+        pass
+    # 最终 checkpoint 写入完整元数据
+    if os.path.isfile(best_path):
+        ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
+        ckpt.update(_run_config(best_epoch, best_metric, best_metrics, wall_time_s))
+        torch.save(ckpt, best_path)
+
     summary = {
         "model_name": model_name,
         "select_metric": early_stop_metric,
@@ -682,6 +753,9 @@ def train_model(dataset_path: str,
         "best_epoch": best_epoch,
         "best_metrics": best_metrics,
         "best_path": best_path,
+        "config_path": os.path.join(save_dir, "config.json"),
+        "metrics_path": os.path.join(save_dir, "metrics.json"),
+        "split_indices_path": os.path.join(save_dir, "split_indices.json"),
         "split_mode": split_mode,
         "feature_version": feature_version,
         "n_train": len(train_idx),
@@ -691,11 +765,11 @@ def train_model(dataset_path: str,
         "train_negative_count": int(n_neg),
         "requested_pos_weight": requested_pos_weight,
         "effective_pos_weight": float(weights.pos_weight),
-        "n_params": n_params,
+        "parameter_count": int(n_params),
         "wall_time_s": wall_time_s,
-        "config": config_payload,
         "final_metrics": history[-1] if history else {},
         "history": history,
+        "config": config,
     }
     with open(os.path.join(save_dir, f"{model_name}_summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
