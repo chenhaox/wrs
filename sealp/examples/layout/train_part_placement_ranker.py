@@ -135,7 +135,7 @@ def main():
         train_loss = 0.0
         n_train = 0
         for batch in train_loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
+            batch = {k: v.to(args.device) for k, v in batch.items()}
             out = model(
                 batch["part_static"], batch["global_feat"],
                 batch["cand_feat"], batch["cand_mask"],

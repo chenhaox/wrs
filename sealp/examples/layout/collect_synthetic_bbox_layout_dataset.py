@@ -78,6 +78,12 @@ from find_optimal_initial_layout_tower_strict_pycharm import (
     WeightedInitialLayoutSearcher,
 )
 from sealp.layout.layout_robot_factory import get_layout_arm
+from wrs.grasping.grasp import GraspCollection
+
+try:
+    from sealp.layout.reachability import check_pose_reachability
+except Exception:  # pragma: no cover - reachability optional
+    check_pose_reachability = None
 
 DEFAULT_CONFIG = fol.DEFAULT_CONFIG
 DEFAULT_OUTPUT = os.path.join(fol.DEFAULT_OUTPUT_DIR, "synthetic_bbox_single_5k.jsonl")
@@ -107,6 +113,17 @@ def _parse_args():
     p.add_argument("--max-station-tries", type=int, default=24,
                    help="Resample goal station when goal fails table/keepout/collision filters")
     p.add_argument("--max-grasp-samples", type=int, default=60)
+    # Oracle score weights + normalizers (candidate ranking target). Defaults are aligned
+    # with the downstream GA fitness: high common-grasp manipulability + SHORT arm travel.
+    p.add_argument("--w-grasp", type=float, default=0.45)
+    p.add_argument("--w-manip", type=float, default=0.35)
+    p.add_argument("--w-dist", type=float, default=0.20)
+    p.add_argument("--grasp-norm", type=float, default=20.0)
+    p.add_argument("--manip-norm", type=float, default=0.05)
+    p.add_argument("--dist-norm", type=float, default=0.40)
+    p.add_argument("--dist-reward", choices=["near", "far"], default="near",
+                   help="near: shorter init->goal distance scores higher (matches GA fitness, "
+                        "default); far: legacy behaviour (farther scores higher)")
     p.add_argument("--episodes-per-geometry", type=int, default=4,
                    help="Reuse Searcher for N attempts on same bbox mesh before new geometry")
     p.add_argument("--gen-threads", type=int, default=0)
@@ -266,8 +283,96 @@ def _part_grasp_total(searcher, pid: str) -> int:
         return 0
 
 
-def _score_init_candidate(searcher, pid: str, xy: np.ndarray, cand,
-                          *, goal_pos: np.ndarray, goal_rot: np.ndarray) -> Optional[Dict]:
+def _build_goal_reason_ctx(searcher, pid: str, goal_pos: np.ndarray, goal_rot: np.ndarray) -> Optional[Dict]:
+    """Precompute goal-side grasp reasoning ONCE (goal is fixed for the whole record).
+
+    The set of common grasps between an init pose and the goal pose equals
+    ``feasible(init) ∩ feasible(goal)``. Since ``goal`` is identical for every init
+    candidate, we compute ``feasible(goal)`` a single time and reuse a filtered grasp
+    collection per candidate. This is *lossless* (same common-grasp counts) but removes
+    the redundant per-candidate goal-pose IK and shrinks the per-candidate grasp set.
+
+    Also caches the fixed goal-side manipulability and reuses one PickPlacePlanner/arm
+    instead of re-creating them for every candidate.
+    """
+    gc_full = searcher._grasp_collection(pid)
+    if gc_full is None or len(gc_full) == 0:
+        return None
+    obs = searcher._planner_obstacles([], current_pid=pid, placed=set())
+    ee = getattr(gc_full, "end_effector", None)
+
+    arms: Dict[str, Dict] = {}
+    for arm_tag in searcher._arm_order(pid):
+        arm = get_layout_arm(searcher.robot, arm_tag, single_arm=searcher.single_arm_mode)
+        planner = PickPlacePlanner(robot=arm)
+        try:
+            goal_gids = planner.reason_common_gids(
+                grasp_collection=gc_full,
+                goal_pose_list=[(goal_pos, goal_rot)],
+                obstacle_list=obs,
+            )
+        except Exception:
+            goal_gids = None
+        if not goal_gids:
+            continue
+        gc_goal = GraspCollection(end_effector=ee, grasp_list=list(gc_full[list(goal_gids)]))
+        place_manip = 0.0
+        if check_pose_reachability is not None:
+            try:
+                place = check_pose_reachability(arm, goal_pos, goal_rot, gc_full, obs, max_grasps=5)
+                place_manip = float(getattr(place, "best_manipulability", 0.0))
+            except Exception:
+                place_manip = 0.0
+        arms[arm_tag] = {
+            "arm_tag": arm_tag,
+            "arm": arm,
+            "planner": planner,
+            "gc_goal": gc_goal,
+            "place_manip": place_manip,
+        }
+
+    if not arms:
+        return None
+    return {"arms": arms, "obs": obs, "gc_full": gc_full}
+
+
+def _combined_manip(entry: Dict, sp: np.ndarray, sr: np.ndarray, gc_full, obs) -> float:
+    """Replicate ``_endpoint_manip`` (mean of positive pick/place manip); place cached."""
+    if check_pose_reachability is None:
+        return 0.0
+    try:
+        pick = check_pose_reachability(entry["arm"], sp, sr, gc_full, obs, max_grasps=5)
+        pick_m = float(getattr(pick, "best_manipulability", 0.0))
+    except Exception:
+        pick_m = 0.0
+    place_m = float(entry.get("place_manip", 0.0))
+    vals = [v for v in (pick_m, place_m) if np.isfinite(v) and v > 0.0]
+    return float(np.mean(vals)) if vals else 0.0
+
+
+DEFAULT_SCORE_CFG: Dict = {
+    "w_grasp": 0.45, "w_manip": 0.35, "w_dist": 0.20,
+    "grasp_norm": 20.0, "manip_norm": 0.05, "dist_norm": 0.40,
+    "dist_reward": "near",
+}
+
+
+def _oracle_score(grasp_count: int, manip: float, dist: float, cfg: Dict) -> float:
+    """Weighted oracle score. ``dist_reward='near'`` rewards short init->goal travel
+    (aligned with the GA fitness); 'far' keeps the legacy farther-is-better behaviour."""
+    dist_term = min(dist / max(cfg["dist_norm"], 1e-9), 1.0)
+    if cfg.get("dist_reward", "near") == "near":
+        dist_term = 1.0 - dist_term
+    return (
+        cfg["w_grasp"] * min(grasp_count / max(cfg["grasp_norm"], 1e-9), 1.0)
+        + cfg["w_manip"] * min(manip / max(cfg["manip_norm"], 1e-9), 1.0)
+        + cfg["w_dist"] * dist_term
+    )
+
+
+def _score_init_candidate(searcher, pid: str, xy: np.ndarray, cand, ctx: Dict,
+                          *, goal_pos: np.ndarray, goal_rot: np.ndarray,
+                          score_cfg: Dict = DEFAULT_SCORE_CFG) -> Optional[Dict]:
     if _fast_pose_reject_reason(searcher, pid, xy, cand):
         return None
     searcher._apply_staging_pose(pid, xy, cand)
@@ -278,49 +383,38 @@ def _score_init_candidate(searcher, pid: str, xy: np.ndarray, cand,
     if searcher._robot_home_collision_reason(active_pids=[pid]):
         return None
 
-    gc = searcher._grasp_collection(pid)
-    if gc is None or len(gc) == 0:
-        return None
     sp = searcher.staging_models[pid].pos.copy()
     sr = searcher.staging_models[pid].rotmat.copy()
+    obs = ctx["obs"]
 
     best_gid_count = 0
-    best_arm = None
-    for arm_tag in searcher._arm_order(pid):
-        arm = get_layout_arm(searcher.robot, arm_tag, single_arm=searcher.single_arm_mode)
-        planner = PickPlacePlanner(robot=arm)
+    best_entry = None
+    for entry in ctx["arms"].values():
         try:
-            gids = planner.reason_common_gids(
-                grasp_collection=gc,
-                goal_pose_list=[(sp, sr), (goal_pos, goal_rot)],
-                obstacle_list=searcher._planner_obstacles([], current_pid=pid, placed=set()),
+            gids = entry["planner"].reason_common_gids(
+                grasp_collection=entry["gc_goal"],
+                goal_pose_list=[(sp, sr)],
+                obstacle_list=obs,
             )
         except Exception:
-            gids = []
-        if gids and len(gids) > best_gid_count:
-            best_gid_count = len(gids)
-            best_arm = arm_tag
-    if best_gid_count < 1:
+            gids = None
+        n = len(gids) if gids else 0
+        if n > best_gid_count:
+            best_gid_count = n
+            best_entry = entry
+    if best_gid_count < 1 or best_entry is None:
         return None
 
-    planner_obs = searcher._planner_obstacles([], current_pid=pid, placed=set())
-    manip = searcher._endpoint_manip(
-        get_layout_arm(searcher.robot, best_arm, single_arm=searcher.single_arm_mode),
-        gc, sp, sr, goal_pos, goal_rot, planner_obs,
-    )
+    manip = _combined_manip(best_entry, sp, sr, ctx["gc_full"], obs)
     dist = float(np.linalg.norm(sp[:2] - goal_pos[:2]))
-    score = (
-        0.45 * min(best_gid_count / 20.0, 1.0)
-        + 0.35 * min(manip / 0.05, 1.0)
-        + 0.20 * min(dist / 0.4, 1.0)
-    )
+    score = _oracle_score(best_gid_count, manip, dist, score_cfg)
     return {
         "xy": _to_list(xy),
         "init_pos": _to_list(sp),
         "init_rotmat": _to_list(sr),
         "pose_tag": str(getattr(cand, "tag", "unknown")),
         "rot_name": str(getattr(cand, "rot_name", "unknown")),
-        "arm_choice": str(best_arm),
+        "arm_choice": str(best_entry["arm_tag"]),
         "common_grasp_count": int(best_gid_count),
         "manipulability": float(manip),
         "dist_to_goal": float(dist),
@@ -329,12 +423,20 @@ def _score_init_candidate(searcher, pid: str, xy: np.ndarray, cand,
 
 
 def _rank_init_candidates(searcher, pid: str, anchors: List[np.ndarray], max_keep: int, *,
-                          goal_pos: np.ndarray, goal_rot: np.ndarray) -> List[Dict]:
+                          goal_pos: np.ndarray, goal_rot: np.ndarray,
+                          score_cfg: Dict = DEFAULT_SCORE_CFG) -> List[Dict]:
+    # Goal is fixed for this record -> precompute goal-feasible grasps once. If no grasp
+    # can reach the goal, no init candidate can share one, so the whole record is skipped
+    # cheaply instead of re-testing every anchor.
+    ctx = _build_goal_reason_ctx(searcher, pid, goal_pos, goal_rot)
+    if ctx is None:
+        return []
     ranked: List[Dict] = []
     for xy in anchors:
         for cand in searcher.rot_cands.get(pid, []) or []:
             rec = _score_init_candidate(
-                searcher, pid, xy, cand, goal_pos=goal_pos, goal_rot=goal_rot,
+                searcher, pid, xy, cand, ctx, goal_pos=goal_pos, goal_rot=goal_rot,
+                score_cfg=score_cfg,
             )
             if rec is not None:
                 ranked.append(rec)
@@ -364,7 +466,8 @@ def _collect_single_record(searcher,
                            max_init_candidates: int,
                            min_init_candidates: int,
                            min_grasp_total: int,
-                           max_station_tries: int) -> Optional[Dict]:
+                           max_station_tries: int,
+                           score_cfg: Dict = DEFAULT_SCORE_CFG) -> Optional[Dict]:
     pid = PART_ID
     if _part_grasp_total(searcher, pid) < int(min_grasp_total):
         return None
@@ -391,7 +494,7 @@ def _collect_single_record(searcher,
     init_hint = deterministic_init_anchor(pid, goal_station[:2], anchors)
     candidates = _rank_init_candidates(
         searcher, pid, anchors, max_init_candidates,
-        goal_pos=goal_pos, goal_rot=goal_rot,
+        goal_pos=goal_pos, goal_rot=goal_rot, score_cfg=score_cfg,
     )
     if len(candidates) < int(min_init_candidates):
         return None
@@ -467,6 +570,7 @@ def _collect_single_record(searcher,
         "feasible": True,
         "best_init_score": float(best["score"]),
         "goal_common_grasp_count": int(best["common_grasp_count"]),
+        "score_cfg": dict(score_cfg),
         "collection_filters": {
             "work_table_bounds": True,
             "staging_arm_keepout": True,
@@ -495,6 +599,13 @@ def main():
     seeds = [int(s.strip()) for s in str(args.seeds).split(",") if s.strip()]
     mode = "w" if args.overwrite or not os.path.isfile(args.output_jsonl) else "a"
 
+    score_cfg = {
+        "w_grasp": float(args.w_grasp), "w_manip": float(args.w_manip),
+        "w_dist": float(args.w_dist), "grasp_norm": float(args.grasp_norm),
+        "manip_norm": float(args.manip_norm), "dist_norm": float(args.dist_norm),
+        "dist_reward": str(args.dist_reward),
+    }
+
     if not args.no_manifest:
         manifest_path = os.path.splitext(os.path.abspath(args.output_jsonl))[0] + "_manifest.json"
         write_run_manifest(manifest_path, {
@@ -505,6 +616,7 @@ def main():
             "output_jsonl": relpath(args.output_jsonl, repo_root),
             "assets_root": relpath(args.assets_root, repo_root),
             "target_kept": int(args.target_kept),
+            "score_cfg": score_cfg,
             "inference": "Fixed goal_pos/goal_rotmat per part → model ranks init_candidates → top-10",
         })
 
@@ -559,6 +671,7 @@ def main():
                     min_init_candidates=args.min_init_candidates,
                     min_grasp_total=args.min_grasp_total,
                     max_station_tries=args.max_station_tries,
+                    score_cfg=score_cfg,
                 )
             except Exception as exc:
                 attempts += 1
