@@ -75,7 +75,7 @@ if _THIS_DIR not in sys.path:
 #       heatmap_pso 版(热力图先验 + 代理模型 + PSO + 换手 L3 + mp-force-rot)。
 # 本脚本 = 在 heatmap_pso 全套能力之上, 叠加"能量场加速 common grasp"和"绕 Z 偏航采样"。
 import find_optimal_initial_layout_tower_strict as fol
-import find_optimal_initial_layout_tower_strict_fast as fast
+import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
 import find_optimal_initial_layout_tower_heatmap_pso as hmpso
 from find_optimal_initial_layout_tower_strict import RotCandidate
 

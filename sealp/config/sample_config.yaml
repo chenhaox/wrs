@@ -13,10 +13,13 @@ project_name: "SampleAssembly"
 # Custom types can be registered via ROBOT_REGISTRY at runtime.
 robot:
   type: "panthera_ht"
+  # mode: dual | single
+  mode: "single"
   pos: [0.0, 0.0, 0.0]
   rotmat: [[1,0,0],[0,1,0],[0,0,1]]
   enable_cc: true
   name: "panthera_ht_arm"
+  dual_arm_y_offset: 0.62
 
 # ------------------------------------------------------------------
 # Assembly sequence
@@ -35,8 +38,9 @@ environment:
   obstacles:
     - name: "work_table"
       type: "box"
-      extent: [0.6, 1.2, 0.02]
-      pos: [0.23, -0.35 ,-0.01]
+      # 原桌面 0.6 x 1.2 m 的一半；单臂场景放在基座前方 +x/-y 象限
+      extent: [0.6, 0.6, 0.02]
+      pos: [0.2335, 0, -0.01]
       rgba: [0.55, 0.45, 0.35, 0.8]
 
 #    - name: "back_wall"

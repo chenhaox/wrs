@@ -20,6 +20,7 @@ import torch
 
 from . import features as F
 from .dataset import sample_to_item, collate_items, move_batch
+from .generator_dataset import rot_names_per_part
 from .models import build_model, is_generator
 
 
@@ -43,17 +44,36 @@ class LayoutModelRunner:
 
     # ---------- scorer 路径 ----------
     @torch.no_grad()
-    def score_layouts(self, samples: List[Dict]) -> Dict[str, np.ndarray]:
-        """对一批含 staging_xy 的 sample 打分。
+    def score_layouts(
+        self, samples: List[Dict], batch_size: int = 256
+    ) -> Dict[str, np.ndarray]:
+        """对含 ``staging_xy`` 的候选分批打分。
 
-        返回 {"feas_prob":[M], "score":[M]}。
+        分批推理避免 2k--10k 候选池一次性构图造成显存峰值。候选顺序严格
+        保持不变，因此共享池的排序比较仍然可复现。
         """
-        items = [sample_to_item(s, self.max_parts, self.feature_version) for s in samples]
-        batch = move_batch(collate_items(items), self.device)
-        out = self.model(batch)
-        prob = torch.sigmoid(out["feas_logit"]).cpu().numpy()
-        score = out["score_pred"].cpu().numpy()
-        return {"feas_prob": prob, "score": score}
+        if not samples:
+            return {
+                "feas_prob": np.zeros(0, dtype=np.float32),
+                "score": np.zeros(0, dtype=np.float32),
+            }
+        batch_size = max(1, int(batch_size))
+        probs: List[np.ndarray] = []
+        scores: List[np.ndarray] = []
+        for start in range(0, len(samples), batch_size):
+            chunk = samples[start:start + batch_size]
+            items = [
+                sample_to_item(s, self.max_parts, self.feature_version)
+                for s in chunk
+            ]
+            batch = move_batch(collate_items(items), self.device)
+            out = self.model(batch)
+            probs.append(torch.sigmoid(out["feas_logit"]).cpu().numpy())
+            scores.append(out["score_pred"].cpu().numpy())
+        return {
+            "feas_prob": np.concatenate(probs, axis=0),
+            "score": np.concatenate(scores, axis=0),
+        }
 
     # ---------- generator 路径 ----------
     @torch.no_grad()
@@ -91,6 +111,75 @@ class LayoutModelRunner:
                     break
                 layout[pid] = station_xy + F.denormalize_offset(off_norm[kk, i], bounds)
             out.append(layout)
+        return out
+
+    @torch.no_grad()
+    def propose_structured_layouts(
+        self,
+        cond: Dict,
+        k: int,
+        part_ids: Optional[List[str]] = None,
+        seed: Optional[int] = None,
+        temperature: float = 1.0,
+    ) -> List[Dict]:
+        """Structured generator output with station / pose / rotation / xy."""
+        batch = self._batch_from_sample(cond)
+        parts = F._ordered_parts(cond)
+        pids = part_ids or [p["part_id"] for p in parts]
+        bounds = F._table_bounds(cond)
+        rot_name_maps = rot_names_per_part(cond)
+
+        if hasattr(self.model, "propose_structured"):
+            structured = self.model.propose_structured(
+                batch, k=k, seed=seed, temperature=temperature)
+        else:
+            layouts = self.propose_layouts(cond, k=k, part_ids=pids)
+            structured = []
+            for layout_xy in layouts:
+                st = self.predict_station(cond)
+                if st is None:
+                    st = np.asarray(cond.get("assembly_station_pos", [0, 0, 0]), float)[:2]
+                st_norm = F.normalize_xy(st, bounds)
+                parts_out = []
+                for i, pid in enumerate(pids):
+                    off = layout_xy.get(pid, np.zeros(2)) - st
+                    parts_out.append({
+                        "part_index": i,
+                        "pose_index": 0,
+                        "rotation_index": 0,
+                        "offset_xy_norm": F.normalize_offset(off, bounds).tolist(),
+                        "confidence": 1.0,
+                    })
+                structured.append({
+                    "station_xy_norm": st_norm,
+                    "parts": parts_out,
+                    "proposal_logprob": 0.0,
+                })
+
+        from .projection import proposal_from_structured
+        out: List[Dict] = []
+        for prop in structured:
+            base = proposal_from_structured(
+                {"station_xy_norm": prop["station_xy_norm"],
+                 "parts": prop["parts"],
+                 "proposal_logprob": prop.get("proposal_logprob", 0.0)},
+                cond, pids)
+            pose_choice = {}
+            rotation_choice = {}
+            for i, pid in enumerate(pids):
+                if i < len(prop["parts"]):
+                    pi = int(prop["parts"][i].get("pose_index", 0))
+                    ri = int(prop["parts"][i].get("rotation_index", 0))
+                    pose_choice[pid] = pi
+                    names = rot_name_maps[i] if i < len(rot_name_maps) else ["unknown"]
+                    rotation_choice[pid] = names[ri] if ri < len(names) else str(ri)
+            out.append({
+                "assembly_station_xy": base["assembly_station_xy"],
+                "xy": base["xy"],
+                "pose_choice": pose_choice,
+                "rotation_choice": rotation_choice,
+                "proposal_logprob": base["proposal_logprob"],
+            })
         return out
 
     @torch.no_grad()

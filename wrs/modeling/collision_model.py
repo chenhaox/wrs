@@ -210,8 +210,8 @@ class CollisionModel(mgm.GeometricModel):
                 raise ValueError("User defined functions must provided for user_defined cdprim!")
             pdcndp = userdef_cdprim_fn(name=self.name, ex_radius=thickness)
         else:
-            print(cdprim_type)
-            raise ValueError("Wrong primitive collision model cdprim_type name!")
+            raise ValueError(
+                f"Wrong primitive collision model cdprim_type name: {cdprim_type!r}")
         mph.change_cdmask(pdcndp, mph.bitmask_ext, action="new", type="both")
         return pdcndp
 

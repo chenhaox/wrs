@@ -69,6 +69,16 @@ import wrs.basis.robot_math as rm
 import wrs.modeling.collision_model as mcm
 from wrs.manipulation.pick_place import PickPlacePlanner
 import wrs.robot_sim.robots.robot_panthera_ht.panthera_ht_dual_arm as pda
+from sealp.config.workspace_settings import load_workspace_settings
+from sealp.layout.layout_robot_factory import (
+    arm_base_xy_map as _layout_arm_base_xy_map,
+    create_layout_robot,
+    get_layout_arm,
+    goto_home_joints,
+    iter_layout_arms,
+    layout_arm_pairs,
+    reset_robot_for_l3 as _reset_layout_robot_for_l3,
+)
 from wrs.grasping.grasp import GraspCollection
 
 from sealp.assembly_sequence import AssemblyDef
@@ -625,21 +635,9 @@ def _model_id_for_part(asm: AssemblyDef, part_id: str) -> Optional[str]:
 
 
 
-def _reset_robot_for_l3(robot) -> None:
-    """清理双臂 hold 状态，避免一次 L3 失败影响下一次候选。"""
-    for arm in (robot.lft_arm, robot.rgt_arm):
-        ee = getattr(arm, "end_effector", None)
-        if ee is not None:
-            try:
-                ee.oiee_list = []
-                ee.oiee_list_bk.clear()
-                ee.oiee_pose_list_bk.clear()
-            except Exception:
-                pass
-        try:
-            arm.goto_given_conf(HOME_JV)
-        except Exception:
-            pass
+def _reset_robot_for_l3(robot, *, single_arm: bool = False) -> None:
+    """清理机械臂 hold 状态，避免一次 L3 失败影响下一次候选。"""
+    _reset_layout_robot_for_l3(robot, HOME_JV, single_arm=single_arm)
 
 
 
@@ -909,25 +907,20 @@ class WeightedInitialLayoutSearcher:
             self.config_yaml, self.table_name, self.table_margin
         )
 
-        self.env_obs = [] if self.ignore_env else _load_env_obstacles(self.config_yaml)
-
-        self.robot = pda.DualPantheraHTNoBody(
-            pos=self.robot_base_pos,
-            rotmat=self.robot_base_rotmat,
-            arm_y_offset=DUAL_ARM_Y_OFFSET,
+        ws = load_workspace_settings(self.config_yaml)
+        self.single_arm_mode = bool(ws["single_arm"])
+        self.dual_arm_y_offset = float(ws["dual_arm_y_offset"])
+        robot_bundle = create_layout_robot(
+            single_arm=self.single_arm_mode,
+            robot_base_pos=self.robot_base_pos,
+            robot_base_rotmat=self.robot_base_rotmat,
+            dual_arm_y_offset=self.dual_arm_y_offset,
             enable_cc=True,
         )
-        # 保险起见，显式 setup_cc 一次：
-        # DualPantheraHTNoBody.setup_cc 会注册左右臂外部碰撞检测，
-        # 后续 self.robot.use_all(); self.robot.is_collided(obstacle_list=[...])
-        # 才能检测“任意初始零件 vs 任意机械臂/夹爪”的碰撞。
-        try:
-            self.robot.setup_cc()
-        except Exception:
-            pass
+        self.robot = robot_bundle.robot
+        goto_home_joints(self.robot, HOME_JV, single_arm=self.single_arm_mode)
 
-        self.robot.lft_arm.goto_given_conf(HOME_JV)
-        self.robot.rgt_arm.goto_given_conf(HOME_JV)
+        self.env_obs = [] if self.ignore_env else _load_env_obstacles(self.config_yaml)
 
         self.grasp_cache: Dict[str, GraspCollection] = {}
         self.grasp_file_for_part: Dict[str, str] = {}
@@ -1120,25 +1113,21 @@ class WeightedInitialLayoutSearcher:
         if not pids:
             return None
 
-        for arm in (self.robot.lft_arm, self.robot.rgt_arm):
+        for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
             try:
                 arm.backup_state()
             except Exception:
                 pass
 
         try:
-            try:
-                self.robot.lft_arm.goto_given_conf(HOME_JV)
-                self.robot.rgt_arm.goto_given_conf(HOME_JV)
-            except Exception:
-                pass
+            goto_home_joints(self.robot, HOME_JV, single_arm=self.single_arm_mode)
 
             for pid in pids:
                 cm = self.staging_models.get(pid)
                 if cm is None:
                     continue
 
-                for arm_tag, arm in (("lft", self.robot.lft_arm), ("rgt", self.robot.rgt_arm)):
+                for arm_tag, arm in layout_arm_pairs(self.robot, single_arm=self.single_arm_mode):
                     try:
                         hit = arm.is_collided(obstacle_list=[cm])
                         collided = hit[0] if isinstance(hit, tuple) else hit
@@ -1152,7 +1141,7 @@ class WeightedInitialLayoutSearcher:
             return None
 
         finally:
-            for arm in (self.robot.lft_arm, self.robot.rgt_arm):
+            for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
                 try:
                     arm.restore_state()
                 except Exception:
@@ -1219,7 +1208,7 @@ class WeightedInitialLayoutSearcher:
 
     def _iter_robot_home_cmodels(self):
         """尽量遍历机器人 home 状态下左右臂/夹爪的 link cmodel。"""
-        arms = [("lft", self.robot.lft_arm), ("rgt", self.robot.rgt_arm)]
+        arms = list(layout_arm_pairs(self.robot, single_arm=self.single_arm_mode))
         for arm_tag, arm in arms:
             # arm 主链
             jlc = getattr(arm, "jlc", None)
@@ -1253,18 +1242,14 @@ class WeightedInitialLayoutSearcher:
             return self._home_robot_aabbs_cache
 
         old_delegator = getattr(self.robot, "delegator", None)
-        for arm in (self.robot.lft_arm, self.robot.rgt_arm):
+        for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
             try:
                 arm.backup_state()
             except Exception:
                 pass
 
         try:
-            try:
-                self.robot.lft_arm.goto_given_conf(HOME_JV)
-                self.robot.rgt_arm.goto_given_conf(HOME_JV)
-            except Exception:
-                pass
+            goto_home_joints(self.robot, HOME_JV, single_arm=self.single_arm_mode)
 
             aabbs = []
             for name, cm in self._iter_robot_home_cmodels():
@@ -1283,7 +1268,7 @@ class WeightedInitialLayoutSearcher:
             return aabbs
 
         finally:
-            for arm in (self.robot.lft_arm, self.robot.rgt_arm):
+            for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
                 try:
                     arm.restore_state()
                 except Exception:
@@ -1293,11 +1278,11 @@ class WeightedInitialLayoutSearcher:
                         pass
 
             try:
-                if old_delegator is self.robot.rgt_arm:
+                if not self.single_arm_mode and old_delegator is self.robot.rgt_arm:
                     self.robot.use_rgt()
                 elif old_delegator is self.robot.lft_arm:
                     self.robot.use_lft()
-                else:
+                elif not self.single_arm_mode:
                     self.robot.use_all()
             except Exception:
                 pass
@@ -1548,28 +1533,16 @@ class WeightedInitialLayoutSearcher:
 
 
     def _arm_base_xy_map(self) -> Dict[str, Tuple[float, float]]:
-        """返回左右臂基座在世界坐标中的 (x, y)。
-
-        重要：
-            DualPantheraHTNoBody 是以左臂基座作为 robot_base_pos。
-            因此：
-                左臂基座 = (robot_base_x, robot_base_y)
-                右臂基座 = (robot_base_x, robot_base_y - DUAL_ARM_Y_OFFSET)
-        """
-        rb_x = float(self.robot_base_pos[0])
-        rb_y = float(self.robot_base_pos[1])
-        return {
-            "lft_arm_base": (rb_x, rb_y),
-            "rgt_arm_base": (rb_x, rb_y - float(DUAL_ARM_Y_OFFSET)),
-        }
+        return _layout_arm_base_xy_map(
+            self.robot_base_pos,
+            single_arm=self.single_arm_mode,
+            dual_arm_y_offset=self.dual_arm_y_offset,
+        )
 
     def _arm_base_y_map(self) -> Dict[str, float]:
-        """兼容旧 metadata/打印：只返回左右臂基座 y 值。"""
+        """兼容旧 metadata/打印：只返回臂基座 y 值。"""
         xy_map = self._arm_base_xy_map()
-        return {
-            "lft_arm_base_y": float(xy_map["lft_arm_base"][1]),
-            "rgt_arm_base_y": float(xy_map["rgt_arm_base"][1]),
-        }
+        return {name: float(xy[1]) for name, xy in xy_map.items()}
 
     def _staging_arm_keepout_reason(self, pid: str, xy: np.ndarray, cand: RotCandidate) -> Optional[str]:
         """随机采样/姿态评估阶段，禁止初始 staging 位置落入左右臂附近矩形禁区。
@@ -2016,6 +1989,8 @@ class WeightedInitialLayoutSearcher:
         return self.grasp_cache.get(pkl)
 
     def _arm_order(self, pid: str) -> Tuple[str, ...]:
+        if self.single_arm_mode:
+            return ("lft",)
         if pid.endswith("_r") or pid.endswith("br") or pid.endswith("fr"):
             return ("rgt", "lft")
         return ("lft", "rgt")
@@ -2362,7 +2337,8 @@ class WeightedInitialLayoutSearcher:
                 planner_obs = self._planner_obstacles(obs, current_pid=pid, placed=placed)
 
                 for arm_tag in self._arm_order(pid):
-                    arm = self.robot.rgt_arm if arm_tag == "rgt" else self.robot.lft_arm
+                    arm = get_layout_arm(
+                        self.robot, arm_tag, single_arm=self.single_arm_mode)
                     planner = PickPlacePlanner(robot=arm)
 
                     try:
@@ -2764,10 +2740,14 @@ class WeightedInitialLayoutSearcher:
 
         self._apply_final_layout(layout)
         _patch_rrt_for_l3()
-        _reset_robot_for_l3(self.robot)
+        _reset_robot_for_l3(self.robot, single_arm=self.single_arm_mode)
 
         lft_transport = TransportPrimitive(self.robot.lft_arm)
-        rgt_transport = TransportPrimitive(self.robot.rgt_arm)
+        rgt_transport = (
+            TransportPrimitive(self.robot.lft_arm)
+            if self.single_arm_mode
+            else TransportPrimitive(self.robot.rgt_arm)
+        )
         placed = set()
         first_pid = self._first_part_id() if self.preassemble_first_part else None
         if first_pid is not None:
@@ -2829,7 +2809,7 @@ class WeightedInitialLayoutSearcher:
             return True
 
         finally:
-            _reset_robot_for_l3(self.robot)
+            _reset_robot_for_l3(self.robot, single_arm=self.single_arm_mode)
 
     def _l3_plan_part(self, layout, step_idx, pid, arm_tag, sp, sr, gp, gr, gc, obs,
                       lft_transport, rgt_transport, verbose=True, placement_obs=None) -> bool:
@@ -3366,7 +3346,14 @@ def main():
     print(f"staging arm keepout    = {not args.disable_staging_arm_keepout}, x_clearance={args.staging_arm_x_clearance:.3f}m, y_clearance={args.staging_arm_y_clearance:.3f}m")
     print(f"goal-y side sampling   = {not args.disable_goal_y_side_biased_sampling}, ratio={args.goal_y_side_bias_ratio:.2f}, eps={args.goal_y_side_eps:.3f}m")
     _rb = _parse_vec3(args.robot_base_pos, (0.0, 0.0, 0.0))
-    print(f"arm base xy used       = lft=({_rb[0]:.3f},{_rb[1]:.3f}), rgt=({_rb[0]:.3f},{_rb[1] - DUAL_ARM_Y_OFFSET:.3f})")
+    _ws = load_workspace_settings(args.config)
+    if _ws["single_arm"]:
+        print(f"robot mode             = single")
+        print(f"arm base xy used       = arm=({_rb[0]:.3f},{_rb[1]:.3f})")
+    else:
+        print(f"robot mode             = dual")
+        _off = float(_ws.get("dual_arm_y_offset", DUAL_ARM_Y_OFFSET))
+        print(f"arm base xy used       = lft=({_rb[0]:.3f},{_rb[1]:.3f}), rgt=({_rb[0]:.3f},{_rb[1] - _off:.3f})")
     print(f"flatsurface poses      = {not args.disable_flatsurface}, threshold={args.fs_stability_threshold}")
     print(f"home collision check   = {not args.disable_home_collision_check}")
     print(f"strict initial arm-box collision = {not args.disable_strict_initial_robot_collision}")

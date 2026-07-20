@@ -1,71 +1,57 @@
 {
   "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_optimal_initial.layout",
-  "score": 0.6221589303442421,
+  "score": 0.5558518008933453,
   "xy": {
-    "base_plate": [
-      0.3725000035762787,
-      -0.35000000000000003
+    "seat": [
+      0.442969707111667,
+      -0.3661103181107134
     ],
-    "post_br": [
-      0.14495735614688515,
-      -0.3051831088194268
+    "leg_bl": [
+      0.2823046043606966,
+      -0.1682900134967346
     ],
-    "post_fr": [
-      0.3693220131022653,
-      -0.4543408341988053
+    "leg_br": [
+      0.26042411304261115,
+      -0.7574924117753964
     ],
-    "post_bl": [
-      0.3839042796970962,
-      0.02872135622701262
+    "leg_fl": [
+      0.32323727810924796,
+      0.013291988103810992
     ],
-    "post_fl": [
-      0.3486569661569795,
-      -0.6644312791801289
-    ],
-    "middle_plate": [
-      0.2958277196481963,
-      -0.7738992118672111
-    ],
-    "top_cross": [
-      0.1827828546983902,
-      0.10911977845980451
+    "leg_fr": [
+      0.13769886454449007,
+      -0.3561610355684459
     ]
   },
   "z_offset": {
-    "base_plate": 0.0,
-    "post_br": 0.003,
-    "post_fr": 0.003,
-    "post_bl": 0.003,
-    "post_fl": 0.003,
-    "middle_plate": 0.08550000327825547,
-    "top_cross": 0.003
+    "seat": 0.0,
+    "leg_bl": 0.003,
+    "leg_br": 0.003,
+    "leg_fl": 0.003,
+    "leg_fr": 0.003
   },
   "pose_tag": {
-    "base_plate": "preassembled_at_assembly_region",
-    "post_br": "identity",
-    "post_fr": "identity",
-    "post_bl": "identity",
-    "post_fl": "identity",
-    "middle_plate": "fs_upright_lifted",
-    "top_cross": "identity"
+    "seat": "preassembled_at_assembly_region",
+    "leg_bl": "identity",
+    "leg_br": "identity",
+    "leg_fl": "identity",
+    "leg_fr": "identity"
   },
   "rot_name": {
-    "base_plate": "goal_pose",
-    "post_br": "identity",
-    "post_fr": "identity",
-    "post_bl": "identity",
-    "post_fl": "identity",
-    "middle_plate": "fs_03",
-    "top_cross": "identity"
+    "seat": "goal_pose",
+    "leg_bl": "identity",
+    "leg_br": "identity",
+    "leg_fl": "identity",
+    "leg_fr": "identity"
   },
-  "assembly_region_id": "r1_c2",
+  "assembly_region_id": "cont",
   "assembly_region_rc": [
-    1,
-    2
+    -1,
+    -1
   ],
   "assembly_station_pos": [
-    0.3725000035762787,
-    -0.35000000000000003,
+    0.142969707111667,
+    -0.3661103181107134,
     0.0
   ],
   "filter_assembly_near_arms": false,
@@ -86,29 +72,25 @@
     ]
   },
   "grasp_counts": {
-    "base_plate": 20,
-    "post_br": 37,
-    "post_fr": 41,
-    "post_bl": 40,
-    "post_fl": 45,
-    "middle_plate": 82,
-    "top_cross": 37
+    "seat": 20,
+    "leg_bl": 20,
+    "leg_br": 23,
+    "leg_fl": 23,
+    "leg_fr": 25
   },
   "arm_choice": {
-    "base_plate": "preassembled",
-    "post_br": "rgt",
-    "post_fr": "rgt",
-    "post_bl": "lft",
-    "post_fl": "rgt",
-    "middle_plate": "rgt",
-    "top_cross": "lft"
+    "seat": "preassembled",
+    "leg_bl": "lft",
+    "leg_br": "rgt",
+    "leg_fl": "lft",
+    "leg_fr": "rgt"
   },
   "score_components": {
-    "grasp": 0.8503815995687942,
-    "manip": 0.320754643920644,
-    "dist": 0.6038812953432412,
-    "rot": 0.7209434519836979,
-    "spatial_y_distribution": 1.0
+    "grasp": 0.7690456953325226,
+    "manip": 0.17548545112562675,
+    "dist": 0.6484458005263404,
+    "rot": 1.0,
+    "spatial_y_distribution": 0.825
   },
   "spatial_constraints": {
     "min_staging_mesh_clearance": 0.01,
@@ -137,16 +119,14 @@
     "robot_home_clearance": 0.03
   },
   "topdown_counts_identity": {
-    "post_br": 572,
-    "post_fr": 572,
-    "post_bl": 572,
-    "post_fl": 572,
-    "middle_plate": 0,
-    "top_cross": 296
+    "leg_bl": 716,
+    "leg_br": 716,
+    "leg_fl": 716,
+    "leg_fr": 716
   },
   "strict_initial_robot_collision": true,
   "chosen_rotmat": {
-    "base_plate": [
+    "seat": [
       [
         1.0,
         0.0,
@@ -163,7 +143,7 @@
         1.0
       ]
     ],
-    "post_br": [
+    "leg_bl": [
       [
         1.0,
         0.0,
@@ -180,7 +160,7 @@
         1.0
       ]
     ],
-    "post_fr": [
+    "leg_br": [
       [
         1.0,
         0.0,
@@ -197,7 +177,7 @@
         1.0
       ]
     ],
-    "post_bl": [
+    "leg_fl": [
       [
         1.0,
         0.0,
@@ -214,41 +194,7 @@
         1.0
       ]
     ],
-    "post_fl": [
-      [
-        1.0,
-        0.0,
-        0.0
-      ],
-      [
-        0.0,
-        1.0,
-        0.0
-      ],
-      [
-        0.0,
-        0.0,
-        1.0
-      ]
-    ],
-    "middle_plate": [
-      [
-        0.0,
-        0.7071067811865475,
-        0.7071067811865475
-      ],
-      [
-        0.0,
-        0.7071067811865475,
-        -0.7071067811865475
-      ],
-      [
-        -1.0,
-        0.0,
-        0.0
-      ]
-    ],
-    "top_cross": [
+    "leg_fr": [
       [
         1.0,
         0.0,
@@ -265,5 +211,12 @@
         1.0
       ]
     ]
+  },
+  "search_eval_stats": {
+    "real_evals": 400,
+    "cache_hits": 0,
+    "first_l2_ok_eval": 1,
+    "best_score_eval": 180,
+    "best_score_seen_during_search": 0.5558518008933453
   }
 }

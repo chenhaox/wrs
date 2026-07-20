@@ -82,13 +82,13 @@ if PROJECT_ROOT not in sys.path:
 # D:/Project/wrs-sealp/sealp/examples/grasp/tower_grasp/
 GRASP_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_grasp")
 
-INPUT_PKL = os.path.join(GRASP_DIR, "tower_base_plate_grasps.pickle")
-OUTPUT_PKL = os.path.join(GRASP_DIR, "tower_base_plate_grasps.pickle")
+INPUT_PKL = os.path.join(GRASP_DIR, "tower_top_cross_grasps.pickle")
+OUTPUT_PKL = os.path.join(GRASP_DIR, "tower_top_cross_grasps_filt.pickle")
 
 # 可视化时加载 base_plate.stl
 # 如果你的 STL 在 Toy/tower，就把 model 改成 tower
 ASSET_DIR = os.path.join(SEALP_ROOT, "assets", "models", "Toy", "model")
-BASE_STL = os.path.join(ASSET_DIR, "base_plate.stl")
+BASE_STL = os.path.join(ASSET_DIR, "top_cross.stl")
 
 
 MAX_ANGLE_DEG = 60.0

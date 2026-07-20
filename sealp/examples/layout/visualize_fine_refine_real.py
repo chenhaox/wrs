@@ -54,7 +54,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import find_optimal_initial_layout_tower_strict as fol  # noqa: E402
-import find_optimal_initial_layout_tower_strict_fast as fast  # noqa: E402
+import find_optimal_initial_layout_tower_strict_pycharm_fast as fast  # noqa: E402
 import find_optimal_initial_layout_tower_global as glob  # noqa: E402
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2  # noqa: E402
 

@@ -64,13 +64,16 @@ import copy
 import gc
 import hashlib
 import json
+import math
 import os
 import pickle
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import trimesh as trm
 
 import wrs.basis.robot_math as rm
 import wrs.manipulation.handover_regrasp as horeg
@@ -101,6 +104,7 @@ from sealp.assembly_sequence import AssemblyDef
 from sealp.config import load_config
 from sealp.colliders import StaticEnvironment
 from sealp.layout import WorkspaceLayout
+from sealp.layout._viz_common import load_table_box
 from sealp.primitives.transport import TransportPrimitive
 from wrs.grasping.grasp import GraspCollection
 
@@ -141,9 +145,9 @@ DUAL_ARM_Y_OFFSET = 0.6
 HOME_JV = np.zeros(6)
 
 APPROACH_DIST = 0.0
-PICK_DEPART_DIST = 0.06
-PLACE_APPROACH_DIST = 0.06
-PLACE_DEPART_DIST = 0.07
+PICK_DEPART_DIST = 0.03
+PLACE_APPROACH_DIST = 0.03
+PLACE_DEPART_DIST = 0.03
 LINEAR_GRANULARITY = 0.04
 
 # 多方向候选的水平倾斜量
@@ -165,6 +169,349 @@ FINAL_HOME_RRT_MAX_TIME = 10.0
 # 默认使用 box（AABB）；triangles 更精细但更慢
 DEFAULT_CDPRIM_TYPE = "box"
 
+# 最终可视化桌面：按当前 work_table 尺寸生成真实贯穿孔洞洞板。
+# 这里只替换显示模型；规划碰撞仍使用 config 中原来的实心 work_table，
+# 因此不会改变已有运动规划结果或缓存指纹。
+PERFORATED_TABLE_LONG_HOLES = 46
+PERFORATED_TABLE_SHORT_HOLES = 23
+PERFORATED_TABLE_HOLE_SEGMENTS = 16
+PERFORATED_TABLE_HOLE_DIAMETER = None  # None: 自动取较小孔距的 42%
+
+
+
+# ============================================================
+# 最终显示用洞洞板桌面（只改视觉，不改规划碰撞）
+# ============================================================
+
+def _square_ring_points(
+    half_x: float,
+    half_y: float,
+    radius: float,
+    segments: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """生成一圈方形单元边界和对应圆孔边界，二者顶点数一致。"""
+    segments = max(8, int(math.ceil(segments / 4.0)) * 4)
+    per_edge = segments // 4
+    outer: List[Tuple[float, float]] = []
+
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((-half_x + 2.0 * half_x * t, -half_y))
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((half_x, -half_y + 2.0 * half_y * t))
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((half_x - 2.0 * half_x * t, half_y))
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((-half_x, half_y - 2.0 * half_y * t))
+
+    outer_arr = np.asarray(outer, dtype=float)
+    norms = np.linalg.norm(outer_arr, axis=1, keepdims=True)
+    inner_arr = radius * outer_arr / np.maximum(norms, 1e-12)
+    return outer_arr, inner_arr
+
+
+def _append_perforated_cell(
+    vertices: List[List[float]],
+    faces: List[List[int]],
+    cx: float,
+    cy: float,
+    z_bottom: float,
+    z_top: float,
+    pitch_x: float,
+    pitch_y: float,
+    radius: float,
+    segments: int,
+    close_bottom: bool,
+    close_right: bool,
+    close_top: bool,
+    close_left: bool,
+) -> None:
+    """添加一个带真实贯穿圆孔的矩形单元。"""
+    outer_xy, inner_xy = _square_ring_points(
+        half_x=pitch_x / 2.0,
+        half_y=pitch_y / 2.0,
+        radius=radius,
+        segments=segments,
+    )
+    n = len(outer_xy)
+    start = len(vertices)
+
+    # 顶面外圈、顶面孔圈、底面外圈、底面孔圈。
+    for xy in outer_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_top])
+    for xy in inner_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_top])
+    for xy in outer_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_bottom])
+    for xy in inner_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_bottom])
+
+    outer_top = start
+    inner_top = start + n
+    outer_bottom = start + 2 * n
+    inner_bottom = start + 3 * n
+
+    for i in range(n):
+        j = (i + 1) % n
+
+        # 顶面环形区域。
+        faces.append([outer_top + i, outer_top + j, inner_top + j])
+        faces.append([outer_top + i, inner_top + j, inner_top + i])
+
+        # 底面环形区域。
+        faces.append([outer_bottom + i, inner_bottom + j, outer_bottom + j])
+        faces.append([outer_bottom + i, inner_bottom + i, inner_bottom + j])
+
+        # 圆孔内壁。
+        faces.append([inner_top + i, inner_bottom + j, inner_bottom + i])
+        faces.append([inner_top + i, inner_top + j, inner_bottom + j])
+
+    # 仅在桌面最外边界封侧壁，单元之间不生成重复内壁。
+    per_edge = n // 4
+    edge_ranges = []
+    if close_bottom:
+        edge_ranges.append(range(0, per_edge))
+    if close_right:
+        edge_ranges.append(range(per_edge, 2 * per_edge))
+    if close_top:
+        edge_ranges.append(range(2 * per_edge, 3 * per_edge))
+    if close_left:
+        edge_ranges.append(range(3 * per_edge, 4 * per_edge))
+
+    for edge_range in edge_ranges:
+        for i in edge_range:
+            j = (i + 1) % n
+            faces.append([outer_top + i, outer_bottom + i, outer_bottom + j])
+            faces.append([outer_top + i, outer_bottom + j, outer_top + j])
+
+
+def _build_perforated_table_mesh(
+    extent: Sequence[float],
+    pos: Sequence[float],
+    long_count: int = PERFORATED_TABLE_LONG_HOLES,
+    short_count: int = PERFORATED_TABLE_SHORT_HOLES,
+    hole_diameter: Optional[float] = PERFORATED_TABLE_HOLE_DIAMETER,
+    hole_segments: int = PERFORATED_TABLE_HOLE_SEGMENTS,
+) -> Tuple[trm.Trimesh, dict]:
+    """按 work_table 当前尺寸生成封闭的真实贯穿孔网格。"""
+    extent = np.asarray(extent, dtype=float).reshape(-1)
+    pos = np.asarray(pos, dtype=float).reshape(-1)
+    if extent.size < 3 or pos.size < 3 or np.any(extent[:3] <= 0):
+        raise ValueError(f"Invalid work_table geometry: extent={extent}, pos={pos}")
+
+    size_x, size_y, thickness = map(float, extent[:3])
+    if size_x >= size_y:
+        nx, ny = int(long_count), int(short_count)
+    else:
+        nx, ny = int(short_count), int(long_count)
+
+    pitch_x = size_x / nx
+    pitch_y = size_y / ny
+    min_pitch = min(pitch_x, pitch_y)
+
+    if hole_diameter is None:
+        hole_diameter = 0.42 * min_pitch
+    hole_diameter = float(hole_diameter)
+    max_diameter = 0.90 * min_pitch
+    if not (0.0 < hole_diameter < max_diameter):
+        raise ValueError(
+            f"hole_diameter={hole_diameter:.6f} must be in (0, {max_diameter:.6f})"
+        )
+
+    radius = hole_diameter / 2.0
+    x_min = float(pos[0] - size_x / 2.0)
+    y_min = float(pos[1] - size_y / 2.0)
+    z_bottom = float(pos[2] - thickness / 2.0)
+    z_top = float(pos[2] + thickness / 2.0)
+
+    vertices: List[List[float]] = []
+    faces: List[List[int]] = []
+
+    for ix in range(nx):
+        cx = x_min + (ix + 0.5) * pitch_x
+        for iy in range(ny):
+            cy = y_min + (iy + 0.5) * pitch_y
+            _append_perforated_cell(
+                vertices=vertices,
+                faces=faces,
+                cx=cx,
+                cy=cy,
+                z_bottom=z_bottom,
+                z_top=z_top,
+                pitch_x=pitch_x,
+                pitch_y=pitch_y,
+                radius=radius,
+                segments=hole_segments,
+                close_bottom=(iy == 0),
+                close_right=(ix == nx - 1),
+                close_top=(iy == ny - 1),
+                close_left=(ix == 0),
+            )
+
+    mesh = trm.Trimesh(
+        vertices=np.asarray(vertices, dtype=float),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=True,
+        validate=True,
+    )
+    mesh.remove_unreferenced_vertices()
+    mesh.fix_normals()
+
+    if not mesh.is_watertight:
+        raise RuntimeError("Generated perforated work_table mesh is not watertight")
+
+    info = {
+        "nx": nx,
+        "ny": ny,
+        "hole_count": nx * ny,
+        "pitch_x": pitch_x,
+        "pitch_y": pitch_y,
+        "hole_diameter": hole_diameter,
+        "is_watertight": bool(mesh.is_watertight),
+    }
+    return mesh, info
+
+
+def _attach_perforated_table_visual(
+    base,
+    extent: Sequence[float],
+    pos: Sequence[float],
+    rgba: Sequence[float],
+):
+    """将洞洞板作为最终场景显示模型附加到 Panda3D。"""
+    mesh, info = _build_perforated_table_mesh(extent=extent, pos=pos)
+
+    # 先导出 STL 再由 WRS 加载。大网格直接传入 CollisionModel 在部分版本中
+    # 可能只生成碰撞对象而不生成可见几何。
+    extent_arr = np.asarray(extent, dtype=float)
+    cache_dir = Path(_THIS_DIR) / "_generated_meshes"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    mesh_name = (
+        f"work_table_perforated_{info['nx']}x{info['ny']}_"
+        f"{extent_arr[0] * 1000.0:.1f}x{extent_arr[1] * 1000.0:.1f}x"
+        f"{extent_arr[2] * 1000.0:.1f}mm_"
+        f"d{info['hole_diameter'] * 1000.0:.3f}mm_"
+        f"seg{PERFORATED_TABLE_HOLE_SEGMENTS}.stl"
+    )
+    mesh_path = cache_dir / mesh_name
+    mesh.export(str(mesh_path))
+
+    board = mcm.CollisionModel(str(mesh_path))
+    rgba_arr = np.asarray(rgba, dtype=float).reshape(-1)
+    if rgba_arr.size >= 4:
+        board.rgba = rgba_arr[:4]
+    elif rgba_arr.size >= 3:
+        board.rgb = rgba_arr[:3]
+        board.alpha = 1.0
+    else:
+        board.rgba = np.array([0.60, 0.60, 0.60, 1.0])
+    board._sealp_name = "work_table_perforated_visual"
+    board._sealp_role = "environment_visual_only"
+    board.attach_to(base)
+
+    print(
+        "[环境/视觉] work_table 已替换为洞洞板："
+        f"{info['nx']}x{info['ny']}={info['hole_count']} 个真实贯穿孔，"
+        f"孔径={info['hole_diameter'] * 1000.0:.2f} mm，"
+        f"watertight={info['is_watertight']}。"
+    )
+    return board
+
+
+def _find_work_table_obstacle_index(
+    obs_list: List,
+    table_extent: Sequence[float],
+    table_pos: Sequence[float],
+) -> Optional[int]:
+    """从 StaticEnvironment 中稳健识别原实心 ``work_table``。
+
+    识别顺序：
+    1. 名称中直接包含 ``work_table`` / ``table``；
+    2. 环境中只有一个障碍物时，直接把它视为桌面；
+    3. 最后再按位置与尺寸进行几何匹配。
+
+    之前只使用 ``get_extents()`` 做严格几何匹配。部分 WRS 版本返回的是
+    变换后的包围盒或不同格式，因此即使环境里只有一张桌子也可能识别失败。
+    """
+    if not obs_list:
+        return None
+
+    # 先尝试通过对象名称识别。不同 WRS 版本使用的名称字段可能不同。
+    for idx, obs in enumerate(obs_list):
+        names = []
+        for attr in ("name", "_name", "_sealp_name", "model_name"):
+            try:
+                value = getattr(obs, attr, None)
+                if value is not None:
+                    names.append(str(value).lower())
+            except Exception:
+                pass
+        joined = " ".join(names)
+        if "work_table" in joined or "worktable" in joined:
+            print(f"[环境/视觉] 通过名称识别 work_table: obstacle[{idx}]")
+            return idx
+
+    # 当前 sample_config.yaml 只有一项静态环境障碍，它就是 work_table。
+    # 这是最可靠的兜底，避免 get_extents() 在不同 WRS 版本中的差异。
+    if len(obs_list) == 1:
+        print(
+            "[环境/视觉] 静态环境仅有 1 个障碍物，"
+            "将 obstacle[0] 视为 work_table 并替换其显示模型。"
+        )
+        return 0
+
+    target_extent = np.asarray(table_extent, dtype=float).reshape(3)
+    target_pos = np.asarray(table_pos, dtype=float).reshape(3)
+    best_idx = None
+    best_score = float("inf")
+
+    for idx, obs in enumerate(obs_list):
+        try:
+            obs_pos = np.asarray(obs.pos, dtype=float).reshape(3)
+        except Exception:
+            continue
+
+        # 尺寸读取失败时，仍可仅按中心位置给出候选。
+        obs_extent = None
+        try:
+            raw_extent = np.asarray(obs.get_extents(), dtype=float).reshape(-1)
+            if raw_extent.size >= 3:
+                obs_extent = np.abs(raw_extent[:3])
+        except Exception:
+            pass
+
+        pos_scale = max(float(np.linalg.norm(target_extent)), 1e-6)
+        pos_score = float(np.linalg.norm(obs_pos - target_pos)) / pos_scale
+
+        if obs_extent is not None:
+            extent_scale = np.maximum(np.abs(target_extent), 1e-6)
+            extent_score = float(
+                np.linalg.norm((obs_extent - target_extent) / extent_scale)
+            )
+        else:
+            extent_score = 0.5
+
+        score = pos_score + extent_score
+        if score < best_score:
+            best_score = score
+            best_idx = idx
+
+    # 多障碍环境下放宽阈值，但仍避免明显误识别。
+    if best_idx is None or best_score > 1.25:
+        print(
+            f"[WARN] work_table 几何匹配失败: best_idx={best_idx}, "
+            f"best_score={best_score:.3f}"
+        )
+        return None
+
+    print(
+        f"[环境/视觉] 通过几何匹配识别 work_table: "
+        f"obstacle[{best_idx}], score={best_score:.3f}"
+    )
+    return best_idx
 
 # ============================================================
 # 数据结构
@@ -420,7 +767,7 @@ def _goto_arm(arm, jv, ee=None) -> None:
         pass
 
 
-def _gen_arm_mesh(arm, alpha: float = 0.35):
+def _gen_arm_mesh(arm, alpha: float = 1.0):
     """生成单臂 mesh。只作为补充显示，不参与碰撞。"""
     try:
         return arm.gen_meshmodel(alpha=alpha)
@@ -483,7 +830,7 @@ def _add_other_arm_to_motion_mesh_list(
     mesh_list: List,
     dual_robot,
     active_arm_tag: str,
-    alpha: float = 0.35,
+    alpha: float = 1.0,
 ) -> None:
     """给单臂 MotionData 的每一帧补上另一只手臂。
 
@@ -520,7 +867,7 @@ def _add_other_arm_to_motion_mesh_list(
             pass
 
 
-def _add_other_arm_to_motion_segments(motion_list: List, dual_robot, alpha: float = 0.35) -> None:
+def _add_other_arm_to_motion_segments(motion_list: List, dual_robot, alpha: float = 1.0) -> None:
     """给换手 motion_list 的每一段补上另一只手臂，使动画始终双臂可见。"""
     if not motion_list:
         return
@@ -763,7 +1110,11 @@ def make_collision_model(mesh_path: str, cdprim_type: str = DEFAULT_CDPRIM_TYPE)
 
 
 def load_env_obstacles(config_path: str, base=None) -> List:
-    """从 sample_config.yaml 加载静态环境障碍物。"""
+    """加载静态环境障碍物，并仅在视觉上把实心 work_table 换成洞洞板。
+
+    返回的 ``obs_list`` 完全保留原始实心桌面，因此运动规划、碰撞检测和缓存
+    逻辑不变；Panda3D 场景中跳过原桌面显示，改为 46×23 个真实贯穿孔的网格。
+    """
     if not config_path or not os.path.isfile(config_path):
         print(f"[WARN] config 不存在，不加载环境障碍物: {config_path}")
         return []
@@ -772,12 +1123,49 @@ def load_env_obstacles(config_path: str, base=None) -> List:
     env = StaticEnvironment(obstacle_defs=cfg.obstacle_defs, base_dir=cfg.config_dir)
     obs_list = list(env.obstacle_list)
 
-    for obs in obs_list:
+    table_extent = table_pos = table_rgba = None
+    table_obs_idx = None
+    try:
+        table_extent, table_pos, table_rgba = load_table_box(config_path, "work_table")
+        table_obs_idx = _find_work_table_obstacle_index(
+            obs_list, table_extent=table_extent, table_pos=table_pos,
+        )
+    except Exception as e:
+        print(
+            f"[WARN] 无法读取/识别 work_table，保留原实心桌面显示: "
+            f"{type(e).__name__}: {e}"
+        )
+
+    for idx, obs in enumerate(obs_list):
         obs._sealp_role = "environment_obstacle"
-        if base is not None:
+        if base is not None and idx != table_obs_idx:
             obs.attach_to(base)
 
-    print(f"[环境] 已加载 {len(obs_list)} 个静态障碍物。")
+    if base is not None and table_obs_idx is not None:
+        try:
+            _attach_perforated_table_visual(
+                base=base,
+                extent=table_extent,
+                pos=table_pos,
+                rgba=table_rgba,
+            )
+        except Exception as e:
+            # 洞洞板生成失败时回退显示原实心桌面，规划障碍物始终不受影响。
+            print(
+                f"[WARN] 洞洞板显示失败，回退原实心 work_table: "
+                f"{type(e).__name__}: {e}"
+            )
+            try:
+                obs_list[table_obs_idx].attach_to(base)
+            except Exception:
+                pass
+    elif base is not None and table_obs_idx is None:
+        print("[WARN] 未识别出 work_table；所有环境障碍物保持原显示。")
+
+    print(
+        f"[环境] 已加载 {len(obs_list)} 个静态障碍物。"
+        "碰撞仍使用原实心 work_table，显示使用洞洞板。"
+    )
     return obs_list
 
 
@@ -955,7 +1343,7 @@ def _goto_home_sim(runner, base=None) -> None:
                     prev.detach()
                 except Exception:
                     pass
-            mesh = runner.robot.gen_meshmodel(alpha=0.45)
+            mesh = runner.robot.gen_meshmodel(alpha=1.0)
             mesh.attach_to(base)
             runner._home_pose_mesh = mesh
         except Exception as e:
@@ -2128,7 +2516,7 @@ class LayoutSequenceVisualizer:
             self.base, self.asm, self.layout, self.part_order, self.cdprim_type
         )
 
-        self.static_robot_mesh = self.robot.gen_meshmodel(alpha=0.25)
+        self.static_robot_mesh = self.robot.gen_meshmodel(alpha=1.0)
         self.static_robot_mesh.attach_to(self.base)
 
         step_id_lookup = {s.part_id: s.step_id for s in self.asm.steps}
@@ -2474,13 +2862,13 @@ def _make_cached_dual_frame(
     # 只有一只手臂参与这步 -> 只画那只手臂(轻量)。
     if not full_robot and len(sides) == 1:
         arm = runner.robot.rgt_arm if "rgt" in sides else runner.robot.lft_arm
-        mesh = _gen_arm_mesh(arm, alpha=0.85)
+        mesh = _gen_arm_mesh(arm, alpha=1.0)
         if mesh is not None:
             return mesh
         # 退回整机渲染。
 
     try:
-        return runner.robot.gen_meshmodel(alpha=0.85)
+        return runner.robot.gen_meshmodel(alpha=1.0)
     except Exception:
         return None
 
@@ -2618,7 +3006,7 @@ def setup_scene_for_cached_playback(runner) -> None:
         runner.base, runner.asm, runner.layout, runner.part_order, runner.cdprim_type
     )
 
-    runner.static_robot_mesh = runner.robot.gen_meshmodel(alpha=0.25)
+    runner.static_robot_mesh = runner.robot.gen_meshmodel(alpha=1.0)
     runner.static_robot_mesh.attach_to(runner.base)
 
     for pid in runner.part_order:

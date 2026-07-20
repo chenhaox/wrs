@@ -41,6 +41,17 @@ class BaseLayoutModel(nn.Module):
         raise NotImplementedError(
             f"{type(self).__name__} 不是生成式模型, 请使用 scorer 推理路径。")
 
+    def propose_structured(
+        self,
+        batch: Dict,
+        k: int,
+        seed: int | None = None,
+        temperature: float = 1.0,
+    ) -> list:
+        """Optional structured proposal API.  Legacy generators may omit this."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement propose_structured().")
+
 
 def mlp(dims: List[int], act=nn.ReLU, last_act=False, dropout: float = 0.0) -> nn.Sequential:
     layers: List[nn.Module] = []

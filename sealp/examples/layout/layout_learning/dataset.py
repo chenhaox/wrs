@@ -15,6 +15,8 @@ import torch
 from torch.utils.data import Dataset
 
 from . import features as F
+from .dynamic_relations import build_dynamic_graph
+from .generator_dataset import generator_item_fields
 
 
 def load_jsonl(path: str) -> List[Dict]:
@@ -32,6 +34,7 @@ def sample_to_item(sample: Dict, max_parts: int = F.MAX_PARTS_DEFAULT,
     """把一条 sample dict 转成 numpy item (未 padding, collate 负责 padding)。"""
     node, gfeat = F.build_set_feature(sample, feature_version)
     graph = F.build_graph_feature(sample, feature_version=feature_version)
+    dynamic_graph = build_dynamic_graph(sample, k_spatial=2)
     tgt = F.build_proposal_target(sample)
     n = max(1, F.sample_num_parts(sample))
     bounds = F._table_bounds(sample)
@@ -42,6 +45,10 @@ def sample_to_item(sample: Dict, max_parts: int = F.MAX_PARTS_DEFAULT,
         "global": gfeat.astype(np.float32),
         "edge_index": graph["edge_index"],
         "edge_feat": graph["edge_feat"].astype(np.float32),
+        "dynamic_edge_index": dynamic_graph["dynamic_edge_index"],
+        "dynamic_edge_feat": dynamic_graph["dynamic_edge_feat"].astype(np.float32),
+        "active_layout_xy": dynamic_graph["active_layout_xy"].astype(np.float32),
+        "geometry_valid": dynamic_graph["geometry_valid"].astype(np.float32),
         "feas": np.float32(1.0 if sample.get("l2_pass", False) else 0.0),
         "score": np.float32(sample.get("layout_score", 0.0) if sample.get("l2_pass", False) else 0.0),
         "xy_target": tgt["xy_target"].astype(np.float32),
@@ -55,6 +62,8 @@ def sample_to_item(sample: Dict, max_parts: int = F.MAX_PARTS_DEFAULT,
         "fail_class": np.int64(F.fail_reason_class(sample)),
         "group_key": F.ranking_group_key(sample),
     }
+    item.update(generator_item_fields(sample, feature_version))
+    return item
 
 
 class LayoutDataset(Dataset):
@@ -63,6 +72,8 @@ class LayoutDataset(Dataset):
         self.max_parts = max_parts
         self.feature_version = feature_version
         self.items = [sample_to_item(s, max_parts, feature_version) for s in samples]
+        for index, item in enumerate(self.items):
+            item["sample_index"] = np.int64(index)
 
     @classmethod
     def from_jsonl(cls, path: str, max_parts: int = F.MAX_PARTS_DEFAULT,
@@ -90,6 +101,20 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
     edge_attr = np.zeros((B, N, N, ED), dtype=np.float32)
     xy_target = np.zeros((B, N, 2), dtype=np.float32)
     xy_valid = np.zeros((B, N), dtype=np.float32)
+    active_layout_xy = np.zeros((B, N, 2), dtype=np.float32)
+    geometry_valid = np.zeros((B, N), dtype=np.float32)
+    dynamic_edge_indices = []
+    dynamic_edge_features = []
+    geometry_feat = np.zeros((B, N, 20), dtype=np.float32)
+    pose_candidate_feat = np.zeros((B, N, 8, 12), dtype=np.float32)
+    pose_candidate_mask = np.zeros((B, N, 8), dtype=np.float32)
+    target_pose_index = np.zeros((B, N), dtype=np.int64)
+    target_rotation_index = np.zeros((B, N), dtype=np.int64)
+    selected_footprint = np.zeros((B, N, 2), dtype=np.float32)
+    is_first_mask = np.zeros((B, N), dtype=np.float32)
+    order_index_arr = np.zeros((B, N), dtype=np.float32)
+    static_adj = np.zeros((B, N, N), dtype=np.float32)
+    static_edge_attr = np.zeros((B, N, N, 10), dtype=np.float32)
 
     for b, it in enumerate(items):
         n = int(it["n"])
@@ -97,6 +122,8 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
         node_mask[b, :n] = 1.0
         xy_target[b, :n] = it["xy_target"][:n]
         xy_valid[b, :n] = it["xy_valid"][:n]
+        active_layout_xy[b, :n] = it["active_layout_xy"][:n]
+        geometry_valid[b, :n] = it["geometry_valid"][:n]
         ei = it["edge_index"]
         ef = it["edge_feat"]
         for e in range(ei.shape[1]):
@@ -104,6 +131,22 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
             if u < N and v < N:
                 adj[b, u, v] = 1.0
                 edge_attr[b, u, v] = ef[e]
+        dynamic_edge_indices.append(
+            it["dynamic_edge_index"].astype(np.int64) + b * N)
+        dynamic_edge_features.append(
+            it["dynamic_edge_feat"].astype(np.float32))
+        if "geometry_feat" in it:
+            n = int(it["n"])
+            geometry_feat[b, :n] = it["geometry_feat"][:n]
+            pose_candidate_feat[b, :n] = it["pose_candidate_feat"][:n]
+            pose_candidate_mask[b, :n] = it["pose_candidate_mask"][:n]
+            target_pose_index[b, :n] = it["target_pose_index"][:n]
+            target_rotation_index[b, :n] = it["target_rotation_index"][:n]
+            selected_footprint[b, :n] = it["selected_footprint"][:n]
+            is_first_mask[b, :n] = it["is_first_mask"][:n]
+            order_index_arr[b, :n] = it["order_index"][:n]
+            static_adj[b, :n, :n] = it["static_adj"][:n, :n]
+            static_edge_attr[b, :n, :n] = it["static_edge_attr"][:n, :n]
 
     # ---- seqrel 辅助: fail 类别 + pair-ranking 分组 id (可选字段) ----
     fail_class = np.stack([it.get("fail_class", np.int64(-1)) for it in items]).astype(np.int64)
@@ -122,6 +165,13 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
         "global_feat": torch.from_numpy(np.stack([it["global"] for it in items])),
         "adj": torch.from_numpy(adj),
         "edge_attr": torch.from_numpy(edge_attr),
+        "dynamic_edge_index": torch.from_numpy(
+            np.concatenate(dynamic_edge_indices, axis=1)),
+        "dynamic_edge_feat": torch.from_numpy(
+            np.concatenate(dynamic_edge_features, axis=0)),
+        "batch_index": torch.arange(B, dtype=torch.long).repeat_interleave(N),
+        "active_layout_xy": torch.from_numpy(active_layout_xy),
+        "geometry_valid": torch.from_numpy(geometry_valid),
         "static_mask": torch.from_numpy(F.STATIC_MASK.copy()),
         "global_static_mask": torch.from_numpy(F.GLOBAL_STATIC_MASK.copy()),
         "feas": torch.from_numpy(np.stack([it["feas"] for it in items])),
@@ -135,6 +185,19 @@ def collate_items(items: List[Dict]) -> Dict[str, torch.Tensor]:
         "table_bounds": torch.from_numpy(np.stack([it["table_bounds"] for it in items])),
         "fail_class": torch.from_numpy(fail_class),
         "group_id": torch.from_numpy(group_id),
+        "sample_index": torch.from_numpy(np.stack([
+            it.get("sample_index", np.int64(-1)) for it in items
+        ]).astype(np.int64)),
+        "geometry_feat": torch.from_numpy(geometry_feat),
+        "pose_candidate_feat": torch.from_numpy(pose_candidate_feat),
+        "pose_candidate_mask": torch.from_numpy(pose_candidate_mask),
+        "target_pose_index": torch.from_numpy(target_pose_index),
+        "target_rotation_index": torch.from_numpy(target_rotation_index),
+        "selected_footprint": torch.from_numpy(selected_footprint),
+        "is_first_mask": torch.from_numpy(is_first_mask),
+        "order_index": torch.from_numpy(order_index_arr),
+        "static_adj": torch.from_numpy(static_adj),
+        "static_edge_attr": torch.from_numpy(static_edge_attr),
     }
     return batch
 

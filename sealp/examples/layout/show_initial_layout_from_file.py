@@ -8,7 +8,7 @@
 功能：
 1. 读取 .layout 文件；
 2. 读取 .asmdef 文件；
-3. 显示 work_table / 环境障碍物；
+3. 显示 46×23 真实贯穿孔洞洞板 work_table，桌面透明度固定为 1；
 4. 显示机器人 home 姿态，方便检查零件是否和手臂/夹爪穿模；
 5. 显示每个零件的初始 staging 位置；
 6. 如果某个零件是 preassembled，例如 base_plate，则以实心模型显示在装配区；
@@ -29,11 +29,14 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
+import trimesh as trm
 import yaml
 
 from wrs import wd, mgm, mcm
@@ -63,6 +66,7 @@ from sealp.assembly_sequence import AssemblyDef
 from sealp.layout import WorkspaceLayout
 from sealp.config import load_config
 from sealp.colliders import StaticEnvironment
+from sealp.layout._viz_common import load_table_box
 
 
 # 兼容旧版/搜索脚本生成的 .layout：
@@ -97,6 +101,12 @@ DEFAULT_CONFIG = os.path.join(SEALP_ROOT, "config", "sample_config.yaml")
 DUAL_ARM_Y_OFFSET = 0.62
 HOME_JV = np.zeros(6)
 
+# 洞洞板参数：长边 46 孔、短边 23 孔。
+PERFORATED_TABLE_LONG_HOLES = 46
+PERFORATED_TABLE_SHORT_HOLES = 23
+PERFORATED_TABLE_HOLE_SEGMENTS = 16
+PERFORATED_TABLE_HOLE_DIAMETER = None  # None: 自动取较小孔距的 42%
+
 
 def make_model(mesh_path: str, rgba=None):
     cm = mcm.CollisionModel(mesh_path)
@@ -105,21 +115,291 @@ def make_model(mesh_path: str, rgba=None):
     return cm
 
 
+def _square_ring_points(
+    half_x: float,
+    half_y: float,
+    radius: float,
+    segments: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """生成一个方形单元外圈和圆孔内圈，二者顶点数一致。"""
+    segments = max(8, int(math.ceil(segments / 4.0)) * 4)
+    per_edge = segments // 4
+    outer = []
+
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((-half_x + 2.0 * half_x * t, -half_y))
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((half_x, -half_y + 2.0 * half_y * t))
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((half_x - 2.0 * half_x * t, half_y))
+    for i in range(per_edge):
+        t = i / per_edge
+        outer.append((-half_x, half_y - 2.0 * half_y * t))
+
+    outer_arr = np.asarray(outer, dtype=float)
+    norms = np.linalg.norm(outer_arr, axis=1, keepdims=True)
+    inner_arr = radius * outer_arr / np.maximum(norms, 1e-12)
+    return outer_arr, inner_arr
+
+
+def _append_perforated_cell(
+    vertices,
+    faces,
+    cx: float,
+    cy: float,
+    z_bottom: float,
+    z_top: float,
+    pitch_x: float,
+    pitch_y: float,
+    radius: float,
+    segments: int,
+    close_bottom: bool,
+    close_right: bool,
+    close_top: bool,
+    close_left: bool,
+) -> None:
+    """向网格中添加一个带真实贯穿圆孔的矩形单元。"""
+    outer_xy, inner_xy = _square_ring_points(
+        pitch_x / 2.0,
+        pitch_y / 2.0,
+        radius,
+        segments,
+    )
+    n = len(outer_xy)
+    start = len(vertices)
+
+    for xy in outer_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_top])
+    for xy in inner_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_top])
+    for xy in outer_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_bottom])
+    for xy in inner_xy:
+        vertices.append([cx + xy[0], cy + xy[1], z_bottom])
+
+    outer_top = start
+    inner_top = start + n
+    outer_bottom = start + 2 * n
+    inner_bottom = start + 3 * n
+
+    for i in range(n):
+        j = (i + 1) % n
+
+        # 顶面。
+        faces.append([outer_top + i, outer_top + j, inner_top + j])
+        faces.append([outer_top + i, inner_top + j, inner_top + i])
+
+        # 底面。
+        faces.append([outer_bottom + i, inner_bottom + j, outer_bottom + j])
+        faces.append([outer_bottom + i, inner_bottom + i, inner_bottom + j])
+
+        # 圆孔内壁。
+        faces.append([inner_top + i, inner_bottom + j, inner_bottom + i])
+        faces.append([inner_top + i, inner_top + j, inner_bottom + j])
+
+    per_edge = n // 4
+    edge_ranges = []
+    if close_bottom:
+        edge_ranges.append(range(0, per_edge))
+    if close_right:
+        edge_ranges.append(range(per_edge, 2 * per_edge))
+    if close_top:
+        edge_ranges.append(range(2 * per_edge, 3 * per_edge))
+    if close_left:
+        edge_ranges.append(range(3 * per_edge, 4 * per_edge))
+
+    for edge_range in edge_ranges:
+        for i in edge_range:
+            j = (i + 1) % n
+            faces.append([outer_top + i, outer_bottom + i, outer_bottom + j])
+            faces.append([outer_top + i, outer_bottom + j, outer_top + j])
+
+
+def _build_perforated_table_mesh(
+    extent: Sequence[float],
+    pos: Sequence[float],
+) -> Tuple[trm.Trimesh, dict]:
+    """按 work_table 当前尺寸生成 46×23 真实贯穿孔洞洞板。"""
+    extent = np.asarray(extent, dtype=float).reshape(3)
+    pos = np.asarray(pos, dtype=float).reshape(3)
+
+    size_x, size_y, thickness = map(float, extent)
+
+    if size_x >= size_y:
+        nx = PERFORATED_TABLE_LONG_HOLES
+        ny = PERFORATED_TABLE_SHORT_HOLES
+    else:
+        nx = PERFORATED_TABLE_SHORT_HOLES
+        ny = PERFORATED_TABLE_LONG_HOLES
+
+    pitch_x = size_x / nx
+    pitch_y = size_y / ny
+    min_pitch = min(pitch_x, pitch_y)
+
+    hole_diameter = (
+        0.42 * min_pitch
+        if PERFORATED_TABLE_HOLE_DIAMETER is None
+        else float(PERFORATED_TABLE_HOLE_DIAMETER)
+    )
+    radius = hole_diameter / 2.0
+
+    x_min = pos[0] - size_x / 2.0
+    y_min = pos[1] - size_y / 2.0
+    z_bottom = pos[2] - thickness / 2.0
+    z_top = pos[2] + thickness / 2.0
+
+    vertices = []
+    faces = []
+
+    for ix in range(nx):
+        cx = x_min + (ix + 0.5) * pitch_x
+        for iy in range(ny):
+            cy = y_min + (iy + 0.5) * pitch_y
+            _append_perforated_cell(
+                vertices=vertices,
+                faces=faces,
+                cx=cx,
+                cy=cy,
+                z_bottom=z_bottom,
+                z_top=z_top,
+                pitch_x=pitch_x,
+                pitch_y=pitch_y,
+                radius=radius,
+                segments=PERFORATED_TABLE_HOLE_SEGMENTS,
+                close_bottom=(iy == 0),
+                close_right=(ix == nx - 1),
+                close_top=(iy == ny - 1),
+                close_left=(ix == 0),
+            )
+
+    mesh = trm.Trimesh(
+        vertices=np.asarray(vertices, dtype=float),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=True,
+        validate=True,
+    )
+    mesh.remove_unreferenced_vertices()
+    mesh.fix_normals()
+
+    if not mesh.is_watertight:
+        raise RuntimeError("生成的洞洞板网格不是 watertight")
+
+    return mesh, {
+        "nx": nx,
+        "ny": ny,
+        "hole_count": nx * ny,
+        "hole_diameter": hole_diameter,
+        "watertight": bool(mesh.is_watertight),
+    }
+
+
+def _attach_perforated_table(
+    config_path: str,
+    base,
+):
+    """显示完全不透明的洞洞板 work_table。"""
+    extent, pos, rgba = load_table_box(config_path, "work_table")
+    mesh, info = _build_perforated_table_mesh(extent, pos)
+
+    cache_dir = Path(_THIS_DIR) / "_generated_meshes"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    extent_arr = np.asarray(extent, dtype=float)
+    mesh_path = cache_dir / (
+        f"work_table_perforated_{info['nx']}x{info['ny']}_"
+        f"{extent_arr[0] * 1000.0:.1f}x"
+        f"{extent_arr[1] * 1000.0:.1f}x"
+        f"{extent_arr[2] * 1000.0:.1f}mm_"
+        f"d{info['hole_diameter'] * 1000.0:.3f}mm_"
+        f"seg{PERFORATED_TABLE_HOLE_SEGMENTS}.stl"
+    )
+
+    if not mesh_path.is_file():
+        mesh.export(str(mesh_path))
+
+    table = mcm.CollisionModel(str(mesh_path))
+
+    rgba_arr = np.asarray(rgba, dtype=float).reshape(-1)
+    if rgba_arr.size >= 3:
+        table.rgba = np.array(
+            [rgba_arr[0], rgba_arr[1], rgba_arr[2], 1.0],
+            dtype=float,
+        )
+    else:
+        table.rgba = np.array([0.55, 0.55, 0.55, 1.0])
+
+    table.attach_to(base)
+
+    print(
+        "[TABLE] perforated work_table: "
+        f"{info['nx']}x{info['ny']}={info['hole_count']} holes, "
+        f"diameter={info['hole_diameter'] * 1000.0:.2f} mm, "
+        f"alpha=1.0, watertight={info['watertight']}"
+    )
+    return table
+
+
 def _load_env_obstacles(config_path: str, base) -> List:
+    """加载环境，并把原实心 work_table 的显示替换成不透明洞洞板。"""
     if not config_path or not os.path.isfile(config_path):
         print(f"[WARN] config 不存在，跳过环境障碍物: {config_path}")
         return []
 
     cfg = load_config(config_path)
-    env = StaticEnvironment(obstacle_defs=cfg.obstacle_defs, base_dir=cfg.config_dir)
+    env = StaticEnvironment(
+        obstacle_defs=cfg.obstacle_defs,
+        base_dir=cfg.config_dir,
+    )
     obs_list = list(env.obstacle_list)
 
-    for obs in obs_list:
+    table_extent, table_pos, _table_rgba = load_table_box(
+        config_path,
+        "work_table",
+    )
+
+    # 当前 sample_config 通常只有一个环境障碍物，即 work_table。
+    table_idx = 0 if len(obs_list) == 1 else None
+
+    # 多障碍物时，按中心位置寻找最接近 work_table 的障碍物。
+    if table_idx is None:
+        target_pos = np.asarray(table_pos, dtype=float).reshape(3)
+        best_dist = float("inf")
+        for idx, obs in enumerate(obs_list):
+            try:
+                obs_pos = np.asarray(obs.pos, dtype=float).reshape(3)
+            except Exception:
+                continue
+            dist = float(np.linalg.norm(obs_pos - target_pos))
+            if dist < best_dist:
+                best_dist = dist
+                table_idx = idx
+
+    # 除桌面之外的环境障碍物保持原样显示。
+    for idx, obs in enumerate(obs_list):
+        if idx == table_idx:
+            continue
         try:
-            obs.rgba = np.array([0.55, 0.55, 0.55, 0.35])
+            obs.rgba = np.array([0.55, 0.55, 0.55, 1.0])
         except Exception:
             pass
         obs.attach_to(base)
+
+    try:
+        _attach_perforated_table(config_path, base)
+    except Exception as e:
+        print(
+            f"[WARN] 洞洞板生成失败，回退到原实心桌面: "
+            f"{type(e).__name__}: {e}"
+        )
+        if table_idx is not None:
+            try:
+                obs_list[table_idx].rgba = np.array([0.55, 0.55, 0.55, 1.0])
+            except Exception:
+                pass
+            obs_list[table_idx].attach_to(base)
 
     print(f"[ENV] loaded obstacles: {len(obs_list)}")
     return obs_list
@@ -373,3 +653,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+  

@@ -1,22 +1,19 @@
-"""Generate a YuanChair JSONL dataset with dual-arm feasibility and Tower scores.
+"""[DEPRECATED] 旧 YuanChair 双臂专用采集脚本。
 
-This adapter deliberately separates two concerns:
+请改用与 Tower / Totem 相同的通用采集入口 ``generate_layout_dataset``::
 
-* feasibility and pose/arm selection use YuanChair's ``FastLayoutSearcher``
-  (dual Panthera-HT, common-grasp reasoning, depart/approach checks, trajectory
-  probe, and YuanChair staging rotation candidates);
-* the final regression label uses exactly the Tower normalization constants,
-  weights, rotation term, and spatial multiplier.
+    python -m sealp.examples.layout.generate_layout_dataset ^
+      --output-jsonl sealp/examples/layout/_output/yuanchair_layout_v1.jsonl ^
+      --overwrite --gen-samples 200 --gen-seeds 0,1 ^
+      --gen-station-mode center_continuous --gen-assembly-type chair ^
+      --asmdef sealp/assembly_sequence/_demo_output/yuanchair.asmdef ^
+      --grasp-dir sealp/examples/grasp/yuanchair_grasp ^
+      --part-order seat,leg_bl,leg_br,leg_fl,leg_fr
 
-The output schema is compatible with ``generate_layout_dataset.py`` and
-``layout_learning`` feature version v2.
+抓取目录 ``yuanchair_grasp/`` 需包含 ``seat_grasps.pickle`` 与
+``leg_model_grasps.pickle``（四腿共用 leg_model）。
 
-Example
--------
-python -m sealp.examples.layout.generate_yuanchair_layout_dataset ^
-  --dataset-out sealp/examples/layout/_output/layout_dataset_yuanchair_v1.jsonl ^
-  --gen-samples 100 --gen-seeds 0,1 ^
-  --gen-resume --gen-threads 1 --gen-fsync-every 1
+本文件保留仅为历史参考；新数据请勿再使用双臂 FastLayoutSearcher 路径。
 """
 
 from __future__ import annotations
@@ -55,10 +52,7 @@ _configure_thread_env_from_argv()
 
 import numpy as np
 
-from sealp.examples.layout import find_optimal_layout as yopt
-from sealp.examples.layout import (
-    find_optimal_initial_layout_tower_strict_pycharm as tower,
-)
+from sealp.examples.layout import find_optimal_layout as yopt, find_optimal_initial_layout_tower_strict_pycharm as tower
 from sealp.examples.layout import generate_layout_dataset as durable
 
 

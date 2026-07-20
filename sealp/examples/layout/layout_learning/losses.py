@@ -38,6 +38,7 @@ class LossWeights:
     use_focal: bool = False         # L_cls 是否用 focal loss
     focal_gamma: float = 2.0        # focal loss 聚焦系数
     focal_alpha: float = 0.25       # focal loss 正类权重 (metadata / 可选扩展)
+    score_only: bool = False        # frozen adapter: total 仅包含 score + rank
 
 
 def _focal_bce(logit: torch.Tensor, target: torch.Tensor,
@@ -54,33 +55,54 @@ def _focal_bce(logit: torch.Tensor, target: torch.Tensor,
 def _pair_rank_loss(pred: torch.Tensor, score: torch.Tensor,
                     feas_mask: torch.Tensor, group_id: torch.Tensor,
                     weights: LossWeights) -> torch.Tensor:
-    """同组 feasible 样本之间的 margin ranking loss。
+    """同组 feasible 样本之间的 margin ranking loss。"""
 
-    只对真实 score 差 >= rank_min_score_gap 的 pair 训练; 高分样本预测也应更高。
-    """
     device = pred.device
     idx = torch.nonzero(feas_mask, as_tuple=False).squeeze(-1)
+
     if idx.numel() < 2:
-        return torch.zeros((), device=device)
+        # 数值为0，但保留与pred相连的计算图
+        return pred.sum() * 0.0
+
     gid = group_id[idx]
     sc = score[idx]
     pr = pred[idx]
-    # 全部可行样本两两配对 (i<j), 再按同组 + score-gap 过滤。
-    ii, jj = torch.combinations(torch.arange(idx.numel(), device=device), r=2).unbind(1)
+
+    ii, jj = torch.combinations(
+        torch.arange(idx.numel(), device=device),
+        r=2,
+    ).unbind(1)
+
     same_group = gid[ii] == gid[jj]
     gap = sc[ii] - sc[jj]
-    keep = same_group & (gap.abs() >= float(weights.rank_min_score_gap))
+    keep = same_group & (
+        gap.abs() >= float(weights.rank_min_score_gap)
+    )
+
     if not bool(keep.any()):
-        return torch.zeros((), device=device)
+        # 没有满足条件的排序对时仍允许backward
+        return pred.sum() * 0.0
+
     ii, jj, gap = ii[keep], jj[keep], gap[keep]
+
     max_pairs = int(weights.rank_pairs_per_batch)
+
     if ii.numel() > max_pairs:
-        sel = torch.randperm(ii.numel(), device=device)[:max_pairs]
+        sel = torch.randperm(
+            ii.numel(),
+            device=device,
+        )[:max_pairs]
+
         ii, jj, gap = ii[sel], jj[sel], gap[sel]
-    # target=+1 表示第一个应更大; 用 gap 的符号统一方向。
+
     target = torch.sign(gap)
-    return Fn.margin_ranking_loss(pr[ii], pr[jj], target,
-                                  margin=float(weights.rank_margin))
+
+    return Fn.margin_ranking_loss(
+        pr[ii],
+        pr[jj],
+        target,
+        margin=float(weights.rank_margin),
+    )
 
 
 def compute_loss(out: Dict[str, torch.Tensor],
@@ -108,9 +130,10 @@ def compute_loss(out: Dict[str, torch.Tensor],
     if feas_mask.any():
         l_score = Fn.smooth_l1_loss(out["score_pred"][feas_mask], score[feas_mask])
     else:
-        l_score = torch.zeros((), device=device)
+        l_score = out["score_pred"].sum() * 0.0
 
-    total = l_cls + weights.alpha * l_score
+    total = weights.alpha * l_score if weights.score_only else (
+        l_cls + weights.alpha * l_score)
     logs = {"l_cls": l_cls.detach(), "l_score": l_score.detach()}
 
     # ---- pair ranking (scorer, 需要 group_id) ----
@@ -121,7 +144,8 @@ def compute_loss(out: Dict[str, torch.Tensor],
         logs["l_rank"] = l_rank.detach()
 
     # ---- fail 辅助分类 (仅 infeasible, 需要模型输出 fail_logits) ----
-    if weights.fail_weight > 0 and "fail_logits" in out and "fail_class" in batch:
+    if (not weights.score_only and weights.fail_weight > 0
+            and "fail_logits" in out and "fail_class" in batch):
         fail_target = batch["fail_class"].long()
         l_fail = Fn.cross_entropy(out["fail_logits"], fail_target,
                                   ignore_index=-1)

@@ -6,12 +6,20 @@
     sealp/examples/grasp/tower_handover/middle_plate_hopg.pickle
     sealp/examples/grasp/tower_regspot/middle_plate_regspot.pickle
 
-运行::
+运行（tower，默认）::
     python -m sealp.examples.grasp.gen_middle_plate_regrasp_data
+
+运行（totem，mesh + grasp 必须与执行时一致）::
+    python -m sealp.examples.grasp.gen_middle_plate_regrasp_data ^
+      --mesh sealp/assets/models/Totem/model/middle_plate.stl ^
+      --grasp-pickle sealp/examples/grasp/totem_grasp/tower_middle_plate_grasps.pickle ^
+      --handover-dir sealp/examples/grasp/totem_handover ^
+      --regspot-dir sealp/examples/grasp/totem_regspot
 """
 
 from __future__ import annotations
 
+import argparse
 import copy
 import os
 import sys
@@ -83,23 +91,60 @@ def _hop_orientations(spot_rotz: float) -> list:
     return rots
 
 
-def main():
-    os.makedirs(HANDOVER_DIR, exist_ok=True)
-    os.makedirs(REGSPOT_DIR, exist_ok=True)
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="为 middle_plate 生成 hopg / regspot pickle（Panthera 双臂）"
+    )
+    parser.add_argument(
+        "--mesh",
+        default="",
+        help="middle_plate STL；默认自动查找 Toy/tower 或 Toy/model",
+    )
+    parser.add_argument(
+        "--grasp-pickle",
+        default=GRASP_PICKLE,
+        help="middle_plate grasp pickle（必须与执行时 --grasp-dir 内文件一致）",
+    )
+    parser.add_argument(
+        "--handover-dir",
+        default=HANDOVER_DIR,
+        help="输出 middle_plate_hopg.pickle 的目录",
+    )
+    parser.add_argument(
+        "--regspot-dir",
+        default=REGSPOT_DIR,
+        help="输出 middle_plate_regspot.pickle 的目录",
+    )
+    return parser.parse_args()
 
-    mesh_path = _resolve_mesh_path()
-    if not os.path.isfile(GRASP_PICKLE):
+
+def main():
+    args = _parse_args()
+    handover_dir = os.path.abspath(args.handover_dir)
+    regspot_dir = os.path.abspath(args.regspot_dir)
+    hopg_out = os.path.join(handover_dir, "middle_plate_hopg.pickle")
+    regspot_out = os.path.join(regspot_dir, "middle_plate_regspot.pickle")
+    grasp_pickle = os.path.abspath(args.grasp_pickle)
+
+    os.makedirs(handover_dir, exist_ok=True)
+    os.makedirs(regspot_dir, exist_ok=True)
+
+    mesh_path = os.path.abspath(args.mesh) if args.mesh else _resolve_mesh_path()
+    if not os.path.isfile(mesh_path):
+        raise FileNotFoundError(f"找不到 middle_plate mesh: {mesh_path}")
+    if not os.path.isfile(grasp_pickle):
         raise FileNotFoundError(
-            f"缺少 grasp pickle: {GRASP_PICKLE}\n"
-            "请先运行: python -m sealp.examples.grasp.planning_tower --only middle_plate --no-vis"
+            f"缺少 grasp pickle: {grasp_pickle}\n"
+            "请先运行对应装配体的 grasp 规划，例如:\n"
+            "  python -m sealp.examples.grasp.planning_tower --only middle_plate --no-vis"
         )
 
     print("=" * 70)
     print("Generate middle_plate regrasp data")
     print(f"mesh       = {mesh_path}")
-    print(f"grasp      = {GRASP_PICKLE}")
-    print(f"hopg out   = {HOPG_OUT}")
-    print(f"regspot out= {REGSPOT_OUT}")
+    print(f"grasp      = {grasp_pickle}")
+    print(f"hopg out   = {hopg_out}")
+    print(f"regspot out= {regspot_out}")
     print("=" * 70)
 
     # FSRegSpotCollection.add_new_spot 内部会 attach_to(base)，需注入 World
@@ -107,7 +152,7 @@ def main():
     mp_fsp.base = base
 
     obj_cm = mcm.CollisionModel(mesh_path)
-    gc = GraspCollection.load_from_disk(file_name=GRASP_PICKLE)
+    gc = GraspCollection.load_from_disk(file_name=grasp_pickle)
     print(f"loaded grasps: n={len(gc)}")
 
     robot = pda.DualPantheraHTNoBody(arm_y_offset=DUAL_ARM_Y_OFFSET, enable_cc=True)
@@ -135,8 +180,8 @@ def main():
     if len(fs_coll) == 0 or all(len(s.fspg_list) == 0 for s in fs_coll):
         raise RuntimeError("未生成任何可行 regspot，请调整 REGSPOT_SPECS 或检查 grasp。")
 
-    fs_coll.save_to_disk(REGSPOT_OUT)
-    print(f"[OK] saved regspot: {REGSPOT_OUT}  spots={len(fs_coll)}")
+    fs_coll.save_to_disk(regspot_out)
+    print(f"[OK] saved regspot: {regspot_out}  spots={len(fs_coll)}")
 
     hopg = mp_hop.HOPGCollection(
         obj_cmodel=obj_cm,
@@ -166,8 +211,8 @@ def main():
     if len(hopg) == 0:
         raise RuntimeError("未生成任何可行 HOPG，请调整候选点。")
 
-    hopg.save_to_disk(HOPG_OUT)
-    print(f"[OK] saved hopg: {HOPG_OUT}  hopg={len(hopg)}  attempts_added={hop_count}")
+    hopg.save_to_disk(hopg_out)
+    print(f"[OK] saved hopg: {hopg_out}  hopg={len(hopg)}  attempts_added={hop_count}")
     print("=" * 70)
     print("Done.")
 

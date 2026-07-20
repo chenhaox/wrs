@@ -41,7 +41,7 @@ import math
 import os
 import sys
 import time
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -50,9 +50,9 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 # Reuse the original CLI / saving logic and the accelerated evaluator.
-import find_optimal_initial_layout_tower_strict_pycharm as fol
+from sealp.examples.layout import find_optimal_initial_layout_tower_strict_pycharm as fol
 import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
-from find_optimal_initial_layout_tower_strict_pycharm import LayoutCandidate
+from sealp.examples.layout.find_optimal_initial_layout_tower_strict_pycharm import LayoutCandidate
 
 
 # ============================================================

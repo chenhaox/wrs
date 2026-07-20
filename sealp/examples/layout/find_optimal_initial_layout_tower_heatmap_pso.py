@@ -3,7 +3,7 @@
 """Heatmap + Surrogate + PSO Tower Initial Layout Search
 ========================================================
 
-这是在 ``find_optimal_initial_layout_tower_strict_fast.py`` 之上的
+这是在 ``find_optimal_initial_layout_tower_strict_pycharm_fast.py`` 之上的
 **搜索策略改造版**，不修改任何现有脚本。
 
 它复用 ``FastWeightedInitialLayoutSearcher``(自带 IK 缓存、grasp 抽样、
@@ -70,7 +70,7 @@ if _THIS_DIR not in sys.path:
 
 # 复用 fast 版(IK 缓存 + 可执行性修复)和原版(CLI / main / 保存)。
 import find_optimal_initial_layout_tower_strict as fol
-import find_optimal_initial_layout_tower_strict_fast as fast
+import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
 from find_optimal_initial_layout_tower_strict import (
     HOME_JV,
     LayoutCandidate,

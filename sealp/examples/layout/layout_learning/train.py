@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -30,7 +31,10 @@ from torch.utils.data import DataLoader, Subset
 from . import features as F
 from .dataset import LayoutDataset, collate_items, move_batch, load_jsonl
 from .losses import LossWeights, compute_loss
+from .relseqgen_losses import RelSeqGenLossWeights, compute_relseqgen_loss
+from .generator_dataset import geometry_holdout_split
 from .models import build_model, is_generator
+from .repro_data import verify_dataset_manifest
 
 
 # ------------------------------------------------------------
@@ -90,6 +94,26 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     return float((ra * rb).sum() / denom)
 
 
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    if len(a) < 2:
+        return float("nan")
+    aa, bb = a - a.mean(), b - b.mean()
+    denom = np.sqrt((aa ** 2).sum() * (bb ** 2).sum())
+    return float((aa * bb).sum() / denom) if denom > 1e-12 else float("nan")
+
+
+def _kendall_tau(a: np.ndarray, b: np.ndarray) -> float:
+    if len(a) < 2:
+        return float("nan")
+    da = a[:, None] - a[None, :]
+    db = b[:, None] - b[None, :]
+    upper = np.triu(np.ones_like(da, dtype=bool), k=1)
+    valid = upper & (da != 0) & (db != 0)
+    if not valid.any():
+        return float("nan")
+    return float(np.sign(da[valid] * db[valid]).mean())
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, gen: bool, topk: int = 10) -> Dict[str, float]:
     model.eval()
@@ -122,6 +146,19 @@ def evaluate(model, loader, device, gen: bool, topk: int = 10) -> Dict[str, floa
     else:
         mae = rmse = float("nan")
     spearman = _spearman(sp[fmask], st[fmask]) if fmask.sum() >= 3 else float("nan")
+    pearson = _pearson(sp[fmask], st[fmask]) if fmask.sum() >= 2 else float("nan")
+    kendall = _kendall_tau(sp[fmask], st[fmask]) if fmask.sum() >= 2 else float("nan")
+    pred_std = float(np.std(sp[fmask])) if fmask.sum() >= 1 else float("nan")
+    true_std = float(np.std(st[fmask])) if fmask.sum() >= 1 else float("nan")
+    std_ratio = (
+        float(pred_std / true_std)
+        if np.isfinite(true_std) and true_std > 1e-12 else float("nan"))
+    if fmask.sum() >= 2 and float(np.var(st[fmask])) > 1e-12:
+        regression_slope = float(
+            np.cov(st[fmask], sp[fmask], ddof=0)[0, 1]
+            / np.var(st[fmask]))
+    else:
+        regression_slope = float("nan")
 
     # top-K (按预测可行概率排序)
     k = int(min(topk, n))
@@ -158,6 +195,12 @@ def evaluate(model, loader, device, gen: bool, topk: int = 10) -> Dict[str, floa
         "score_mae": mae,
         "score_rmse": rmse,
         "score_spearman": spearman,
+        "score_pearson": pearson,
+        "score_kendall": kendall,
+        "score_pred_std": pred_std,
+        "score_true_std": true_std,
+        "score_std_ratio": std_ratio,
+        "score_regression_slope": regression_slope,
         "topk_hit": topk_hit,
         "precision_at_k": precision_at_k,
         "recall_at_k": recall_at_k,
@@ -165,6 +208,43 @@ def evaluate(model, loader, device, gen: bool, topk: int = 10) -> Dict[str, floa
         "topk_avg_score_norm": topk_avg_norm,
         "enrichment": enrichment,
         "composite": composite,
+    }
+
+
+def evaluate_generator_loss(model, loader, device, model_name: str,
+                            weights, rq) -> Dict[str, float]:
+    """验证集生成损失 (l_xy + l_station)。
+
+    生成器模型的价值在于 proposal 质量, 而 composite 是打分器指标, 对生成毫无意义
+    (SAGPN/RelSeqGen 在单任务数据上 composite 恒定, 会把 best 选在几乎没训练的
+    epoch 1)。这里用验证集上的生成损失作为选择依据, 返回其负值 ``gen_val_neg``
+    以便与"越大越好"的 best 选择逻辑统一。
+    """
+    from .relseqgen_losses import compute_relseqgen_loss
+    model.eval()
+    xy_sum = 0.0
+    st_sum = 0.0
+    nb = 0
+    with torch.no_grad():
+        for batch in loader:
+            batch = move_batch(batch, device)
+            out = model(batch)
+            if model_name == "relseqgen":
+                res = compute_relseqgen_loss(out, batch, weights, rq)
+            else:
+                res = compute_loss(out, batch, weights, True)
+            logs = res["logs"]
+            xy_sum += float(logs.get("l_xy", 0.0))
+            st_sum += float(logs.get("l_station", 0.0))
+            nb += 1
+    xy = xy_sum / max(nb, 1)
+    st = st_sum / max(nb, 1)
+    # 仅用 xy (零件摆放质量) 选择, 避免 station NLL 靠缩方差刷分干扰选择。
+    return {
+        "gen_val_xy": xy,
+        "gen_val_station": st,
+        "gen_val_loss": xy + st,
+        "gen_val_neg": -xy,
     }
 
 
@@ -311,6 +391,7 @@ def _model_hidden_dropout(model_name: str, model_kwargs: Optional[Dict]) -> Tupl
         "mlp": (128, 0.1),
         "deepsets": (128, 0.1),
         "seqrel": (64, 0.2),
+        "dynaseqrel_dynedge": (64, 0.2),
         "gcn": (128, 0.1),
         "gat": (128, 0.1),
         "sagpn": (128, 0.1),
@@ -346,6 +427,216 @@ def _group_grad_norms(model) -> Dict[str, float]:
     return {k: float(np.sqrt(v)) for k, v in groups.items()}
 
 
+def _frozen_output_close(
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    *,
+    atol: float = 1e-4,
+    rtol: float = 1e-5,
+) -> bool:
+    """Frozen backbone outputs may differ bitwise on CUDA due to nondeterministic
+    sparse aggregation, even when parameters are unchanged."""
+    return bool(torch.allclose(actual, expected, atol=atol, rtol=rtol))
+
+
+def _state_hash(state: Dict[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(state):
+        tensor = state[name].detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(str(tuple(tensor.shape)).encode("ascii"))
+        digest.update(tensor.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _reset_module_parameters(module: torch.nn.Module) -> None:
+    if hasattr(module, "reset_parameters"):
+        module.reset_parameters()
+
+
+def _build_strict_shared_v3(
+    flat_dim: int,
+    model_kwargs: Dict[str, Any],
+    model_init_seed: int,
+    score_trunk_init_seed: int,
+) -> Tuple[torch.nn.Module, Dict[str, Any]]:
+    if model_kwargs.get("head_mode") != "task_specific_score_v3":
+        raise ValueError("--strict-shared-init 要求 task_specific_score_v3")
+    reference_kwargs = dict(model_kwargs)
+    reference_kwargs["head_mode"] = "shared_v1"
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(model_init_seed)
+        reference = build_model(
+            "dynaseqrel_dynedge", flat_dim=flat_dim, **reference_kwargs)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(model_init_seed)
+        model = build_model(
+            "dynaseqrel_dynedge", flat_dim=flat_dim, **model_kwargs)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(score_trunk_init_seed)
+        model.score_trunk.apply(_reset_module_parameters)
+
+    reference_state = reference.state_dict()
+    model_state = model.state_dict()
+    shared_names = []
+    extra_names = []
+    for name, tensor in model_state.items():
+        if name in reference_state:
+            if tensor.shape != reference_state[name].shape:
+                raise RuntimeError(
+                    f"strict shared init shape mismatch: {name}: "
+                    f"{tuple(tensor.shape)} != {tuple(reference_state[name].shape)}")
+            tensor.copy_(reference_state[name])
+            shared_names.append(name)
+        else:
+            extra_names.append(name)
+    missing = sorted(set(reference_state) - set(model_state))
+    if missing:
+        raise RuntimeError(f"strict-v3 missing v2 parameters: {missing}")
+    if any(not name.startswith("score_trunk.") for name in extra_names):
+        raise RuntimeError(
+            f"strict-v3 unexpected extra parameters: {extra_names}")
+    shared_state = {name: model.state_dict()[name] for name in shared_names}
+    return model, {
+        "strict_shared_init": True,
+        "shared_init_reference": "v2",
+        "shared_parameter_count": int(sum(
+            model_state[name].numel() for name in shared_names)),
+        "shared_parameter_tensor_count": len(shared_names),
+        "shared_parameter_hash": _state_hash(shared_state),
+        "extra_parameter_count": int(sum(
+            model_state[name].numel() for name in extra_names)),
+        "shared_parameter_names": sorted(shared_names),
+        "extra_parameter_names": sorted(extra_names),
+        "model_init_seed": int(model_init_seed),
+        "score_trunk_init_seed": int(score_trunk_init_seed),
+    }
+
+
+def _validate_v2_base_checkpoint(
+    checkpoint_path: str,
+    checkpoint: Dict[str, Any],
+    feature_version: str,
+    model_kwargs: Dict[str, Any],
+) -> None:
+    expected = {
+        "model_name": "dynaseqrel_dynedge",
+        "feature_version": "v2",
+    }
+    for key, value in expected.items():
+        if checkpoint.get(key) != value:
+            raise ValueError(
+                f"base checkpoint {key} mismatch: "
+                f"expected {value!r}, got {checkpoint.get(key)!r}")
+    ck_kwargs = checkpoint.get("model_kwargs", {})
+    checks = {
+        "relation_mode": "staging_dynedge",
+        "edge_encoding": "edge_mlp_v2",
+        "dynamic_k_spatial": 2,
+        "hidden": 64,
+        "dropout": 0.2,
+    }
+    for key, expected_value in checks.items():
+        actual = ck_kwargs.get(key, 64 if key == "hidden" else None)
+        if actual != expected_value:
+            raise ValueError(
+                f"base checkpoint model_kwargs.{key} mismatch: "
+                f"expected {expected_value!r}, got {actual!r}")
+    base_head_mode = ck_kwargs.get("head_mode", "shared_v1")
+    if base_head_mode != "shared_v1":
+        raise ValueError(
+            f"base checkpoint must be v2 shared_v1, got {base_head_mode!r}")
+    requested_checks = {
+        "relation_mode": "staging_dynedge",
+        "edge_encoding": "edge_mlp_v2",
+        "dynamic_k_spatial": 2,
+        "hidden": 64,
+        "dropout": 0.2,
+    }
+    for key, expected_value in requested_checks.items():
+        if model_kwargs.get(key) != expected_value:
+            raise ValueError(
+                f"adapter architecture {key} must be {expected_value!r}, "
+                f"got {model_kwargs.get(key)!r}")
+    if feature_version != "v2":
+        raise ValueError("adapter-v4 requires --feature-version v2")
+    if int(checkpoint.get("epoch", -1)) != 48:
+        raise ValueError(
+            f"base checkpoint must be best-PR epoch 48, got "
+            f"{checkpoint.get('epoch')!r}: {checkpoint_path}")
+    if checkpoint.get("select_metric") != "pr_auc":
+        raise ValueError(
+            "base checkpoint selection metric must be pr_auc, got "
+            f"{checkpoint.get('select_metric')!r}")
+
+
+def _load_frozen_adapter_base(
+    model: torch.nn.Module,
+    checkpoint_path: str,
+    feature_version: str,
+    model_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not checkpoint_path:
+        raise ValueError("adapter-v4 requires --base-checkpoint")
+    if not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(
+            f"base checkpoint does not exist: {checkpoint_path}")
+    checkpoint = torch.load(
+        checkpoint_path, map_location="cpu", weights_only=False)
+    _validate_v2_base_checkpoint(
+        checkpoint_path, checkpoint, feature_version, model_kwargs)
+    base_state = checkpoint["state_dict"]
+    result = model.load_state_dict(base_state, strict=False)
+    expected_missing = sorted(
+        name for name in model.state_dict() if name.startswith("score_adapter."))
+    if sorted(result.missing_keys) != expected_missing or result.unexpected_keys:
+        raise RuntimeError(
+            "adapter base state mismatch: "
+            f"missing={result.missing_keys}, unexpected={result.unexpected_keys}")
+    model.freeze_base_for_score_adapter()
+    frozen_names = [
+        name for name, parameter in model.named_parameters()
+        if not parameter.requires_grad]
+    trainable_names = [
+        name for name, parameter in model.named_parameters()
+        if parameter.requires_grad]
+    if not trainable_names or any(
+            not name.startswith("score_adapter.") for name in trainable_names):
+        raise RuntimeError(
+            f"only score_adapter may remain trainable, got {trainable_names}")
+    return {
+        "training_mode": "frozen_residual_score_adapter",
+        "base_checkpoint_path": os.path.abspath(checkpoint_path),
+        "base_checkpoint_epoch": int(checkpoint["epoch"]),
+        "base_checkpoint_sha256": _file_sha256(checkpoint_path),
+        "frozen_parameter_count": int(sum(
+            parameter.numel() for parameter in model.parameters()
+            if not parameter.requires_grad)),
+        "trainable_parameter_count": int(sum(
+            parameter.numel() for parameter in model.parameters()
+            if parameter.requires_grad)),
+        "adapter_hidden_dim": int(model.adapter_hidden_dim),
+        "adapter_dropout": float(model.adapter_dropout),
+        "residual_space": "score_logit",
+        "zero_initialized_output": True,
+        "frozen_modules": list(model.frozen_base_modules()),
+        "frozen_parameter_names": frozen_names,
+        "trainable_parameter_names": trainable_names,
+        "primary_metric": "score_spearman",
+    }
+
+
 def train_model(dataset_path: str,
                 model_name: str,
                 save_dir: str,
@@ -369,6 +660,7 @@ def train_model(dataset_path: str,
                 early_stop_patience: int = 0,
                 early_stop_metric: str = "composite",
                 min_delta: float = 1e-4,
+                save_metric_checkpoints: bool = False,
                 debug_grad: bool = False,
                 debug_batches: int = 3,
                 limit_samples: int = 0,
@@ -377,12 +669,37 @@ def train_model(dataset_path: str,
                 shared_split_path: Optional[str] = None,
                 run_root: Optional[str] = None,
                 code_version: str = "seqrel-v2-repro",
+                strict_shared_init: bool = False,
+                shared_init_reference: str = "v2",
+                model_init_seed: Optional[int] = None,
+                score_trunk_init_seed: Optional[int] = None,
+                dataloader_seed: Optional[int] = None,
+                base_checkpoint_path: Optional[str] = None,
+                dataset_manifest_path: Optional[str] = None,
+                geometry_holdout_domains: Optional[List[str]] = None,
+                generator_pose_mode: str = "predict",
+                relseqgen_loss_weights: Optional[RelSeqGenLossWeights] = None,
+                generator_elite_quantile: float = 0.70,
                 verbose: bool = True) -> Dict:
     os.makedirs(save_dir, exist_ok=True)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(seed)
     np.random.seed(seed)
+    model_init_seed = seed if model_init_seed is None else int(model_init_seed)
+    score_trunk_init_seed = (
+        seed + 100003 if score_trunk_init_seed is None
+        else int(score_trunk_init_seed))
+    dataloader_seed = seed if dataloader_seed is None else int(dataloader_seed)
 
+    manifest_split_path = (
+        split_indices_path
+        or (shared_split_path if shared_split_path
+            and os.path.isfile(shared_split_path) else None))
+    dataset_manifest = verify_dataset_manifest(
+        dataset_path,
+        manifest_path=dataset_manifest_path,
+        split_path=manifest_split_path,
+    )
     samples = load_jsonl(dataset_path)
     if not samples:
         raise RuntimeError(f"数据集为空: {dataset_path}")
@@ -438,9 +755,16 @@ def train_model(dataset_path: str,
             print(f"[train] 使用共享 split: {shared_split_path} "
                   f"(train={len(train_idx)} val={len(val_idx)})")
     else:
-        train_idx, val_idx = _split_indices(samples, val_ratio, seed, split_mode,
-                                            region_holdout_mode=region_holdout_mode,
-                                            xy_grid=region_xy_grid)
+        if split_mode == "geometry_holdout":
+            holdout = set(geometry_holdout_domains or [])
+            train_idx, val_idx, geo_meta = geometry_holdout_split(
+                samples, val_ratio, seed,
+                holdout_domains=holdout if holdout else None)
+            split_meta.update(geo_meta)
+        else:
+            train_idx, val_idx = _split_indices(samples, val_ratio, seed, split_mode,
+                                                region_holdout_mode=region_holdout_mode,
+                                                xy_grid=region_xy_grid)
         if shared_split_path:
             _save_split_indices(shared_split_path, train_idx, val_idx, split_meta)
             split_source = shared_split_path
@@ -451,20 +775,70 @@ def train_model(dataset_path: str,
                         {**split_meta, "source": split_source})
     train_ds, val_ds = Subset(ds, train_idx), Subset(ds, val_idx)
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              collate_fn=collate_items, drop_last=False)
+    loader_generator = torch.Generator()
+    loader_generator.manual_seed(dataloader_seed)
+    train_loader = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True,
+        collate_fn=collate_items, drop_last=False,
+        generator=loader_generator)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                             collate_fn=collate_items)
 
     flat_dim = F.flatten_feature_dim(max_parts)
     gen = is_generator(model_name)
-    model = build_model(model_name, flat_dim=flat_dim, **(model_kwargs or {})).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    effective_model_kwargs = dict(model_kwargs or {})
+    if model_name == "relseqgen":
+        effective_model_kwargs.setdefault("pose_mode", generator_pose_mode)
+    head_mode = effective_model_kwargs.get("head_mode", "shared_v1")
+    is_adapter = (
+        model_name == "dynaseqrel_dynedge"
+        and head_mode == "frozen_residual_score_adapter_v4")
+    if strict_shared_init:
+        if model_name != "dynaseqrel_dynedge":
+            raise ValueError("--strict-shared-init only supports dynaseqrel_dynedge")
+        if shared_init_reference != "v2":
+            raise ValueError("--shared-init-reference currently only supports v2")
+        if is_adapter:
+            raise ValueError("strict shared init and adapter-v4 are mutually exclusive")
+        model, initialization_metadata = _build_strict_shared_v3(
+            flat_dim, effective_model_kwargs, model_init_seed,
+            score_trunk_init_seed)
+    else:
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(model_init_seed)
+            model = build_model(
+                model_name, flat_dim=flat_dim, **effective_model_kwargs)
+        initialization_metadata = {
+            "strict_shared_init": False,
+            "shared_init_reference": None,
+            "shared_parameter_count": 0,
+            "shared_parameter_hash": None,
+            "extra_parameter_count": 0,
+            "model_init_seed": int(model_init_seed),
+            "score_trunk_init_seed": (
+                int(score_trunk_init_seed)
+                if head_mode == "task_specific_score_v3" else None),
+        }
+    adapter_metadata: Dict[str, Any] = {}
+    if is_adapter:
+        adapter_metadata = _load_frozen_adapter_base(
+            model, str(base_checkpoint_path or ""), feature_version,
+            effective_model_kwargs)
+    model = model.to(device)
+    trainable_parameters = [
+        parameter for parameter in model.parameters()
+        if parameter.requires_grad]
+    if not trainable_parameters:
+        raise RuntimeError("model has no trainable parameters")
+    opt = torch.optim.Adam(
+        trainable_parameters, lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         opt, mode="max", factor=0.5, patience=max(3, early_stop_patience // 3 or 5),
         min_lr=1e-6)
     # 使用深拷贝，避免 auto pos_weight 修改调用方复用的 LossWeights 对象。
     weights = copy.deepcopy(loss_weights) if loss_weights is not None else LossWeights()
+    if is_adapter:
+        weights.score_only = True
 
     # ---- elite 分位阈值: 用训练集 feasible 分数的分位数 ----
     n_feas = sum(1 for s in samples if s.get("l2_pass", False))
@@ -479,6 +853,22 @@ def train_model(dataset_path: str,
             print(f"[train] elite quantile={elite_quantile:.2f} "
                   f"-> score_threshold={weights.score_threshold:.4f} "
                   f"(train feasible={len(train_feas_scores)})")
+
+    if model_name == "relseqgen":
+        rq = relseqgen_loss_weights or RelSeqGenLossWeights()
+        rq.elite_quantile = float(
+            elite_quantile if elite_quantile is not None else generator_elite_quantile)
+        if weights.score_threshold > 0:
+            rq.score_threshold = float(weights.score_threshold)
+    else:
+        rq = None
+
+    # 生成器模型: composite 对生成质量无意义, 默认改用负验证生成损失选 best checkpoint。
+    if gen and early_stop_metric == "composite":
+        early_stop_metric = "gen_val_neg"
+        if verbose:
+            print("[train] generator: 自动改用 gen_val_neg "
+                  "(负验证生成损失 = -(l_xy+l_station)) 选择 best checkpoint")
 
     # ---- pos_weight: 仅根据当前训练 split 自动计算，避免验证集泄漏 ----
     n_pos = sum(1 for i in train_idx if samples[i].get("l2_pass", False))
@@ -535,6 +925,16 @@ def train_model(dataset_path: str,
     legacy_log_path = os.path.join(save_dir, f"{model_name}_train.log")
     history: List[Dict] = []
     since_improve = 0
+    auxiliary_best = {
+        "pr_auc": {"value": -np.inf, "mode": "max", "epoch": 0, "path": os.path.join(
+            save_dir, "best_pr_auc.pt")},
+        "score_spearman": {"value": -np.inf, "mode": "max", "epoch": 0, "path": os.path.join(
+            save_dir, "best_spearman.pt")},
+        "score_rmse": {"value": np.inf, "mode": "min", "epoch": 0, "path": os.path.join(
+            save_dir, "best_rmse.pt")},
+        "composite": {"value": -np.inf, "mode": "max", "epoch": 0, "path": os.path.join(
+            save_dir, "best_legacy_composite.pt")},
+    }
     t0 = time.time()
 
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -548,6 +948,22 @@ def train_model(dataset_path: str,
     hidden_dim, dropout = _model_hidden_dropout(model_name, model_kwargs)
     git_commit = _git_commit()
     n_params = sum(p.numel() for p in model.parameters())
+    frozen_state_reference = None
+    frozen_output_reference = None
+    frozen_check_batch = None
+    if is_adapter:
+        frozen_state_reference = _state_hash({
+            name: tensor for name, tensor in model.state_dict().items()
+            if not name.startswith("score_adapter.")
+        })
+        frozen_check_batch = move_batch(next(iter(val_loader)), device)
+        model.eval()
+        with torch.no_grad():
+            initial_frozen_output = model(frozen_check_batch)
+        frozen_output_reference = {
+            key: initial_frozen_output[key].detach().clone()
+            for key in ("feas_logit", "fail_logits")
+        }
     abs_dataset = os.path.abspath(dataset_path)
     abs_save_dir = os.path.abspath(save_dir)
     abs_best_path = os.path.join(abs_save_dir, f"{model_name}_best.pt")
@@ -558,21 +974,41 @@ def train_model(dataset_path: str,
         w = weights
         disable_relation = bool((model_kwargs or {}).get("disable_relation", False))
         disable_sequence = bool((model_kwargs or {}).get("disable_sequence", False))
-        relation_variant = (
-            "no_relation" if disable_relation
-            else "no_sequence" if disable_sequence
-            else "full"
-        )
+        if model_name == "dynaseqrel_dynedge":
+            relation_variant = str(
+                (model_kwargs or {}).get("relation_mode", "staging_dynedge"))
+        else:
+            relation_variant = (
+                "no_relation" if disable_relation
+                else "no_sequence" if disable_sequence
+                else "full"
+            )
         return {
             "model_name": model_name,
             "feature_version": feature_version,
             "split_mode": split_mode,
             "training_seed": seed,
+            "dataloader_seed": int(dataloader_seed),
+            "model_init_seed": int(model_init_seed),
+            "score_trunk_init_seed": (
+                int(score_trunk_init_seed)
+                if head_mode == "task_specific_score_v3" else None),
             "hidden_dim": hidden_dim,
             "dropout": dropout,
             "disable_relation": disable_relation,
             "disable_sequence": disable_sequence,
             "relation_variant": relation_variant,
+            "dynamic_edge_dim": (
+                11 if model_name == "dynaseqrel_dynedge" else None),
+            "dynamic_k_spatial": (
+                int((model_kwargs or {}).get("dynamic_k_spatial", 2))
+                if model_name == "dynaseqrel_dynedge" else None),
+            "dynedge_edge_encoding": (
+                str((model_kwargs or {}).get("edge_encoding", "raw_v1"))
+                if model_name == "dynaseqrel_dynedge" else None),
+            "dynedge_head_mode": (
+                str((model_kwargs or {}).get("head_mode", "shared_v1"))
+                if model_name == "dynaseqrel_dynedge" else None),
             "score_weight": float(w.alpha),
             "rank_weight": float(w.rank_weight),
             "fail_weight": float(w.fail_weight),
@@ -598,13 +1034,38 @@ def train_model(dataset_path: str,
             "topk": int(topk),
             "epochs": int(epochs),
             "early_stop_patience": int(early_stop_patience),
+            "save_metric_checkpoints": bool(save_metric_checkpoints),
             "effective_pos_weight": float(w.pos_weight),
             "split_indices_source": split_source,
             "run_root": os.path.abspath(run_root) if run_root else None,
             "best_metrics": best_m or {},
+            "dataset_manifest_path": (
+                os.path.abspath(dataset_manifest_path)
+                if dataset_manifest_path else (
+                    os.path.abspath(
+                        os.path.splitext(dataset_path)[0] + "_manifest.json")
+                    if dataset_manifest else None)),
+            "dataset_sha256": (
+                dataset_manifest.get("dataset_sha256")
+                if dataset_manifest else None),
+            "split_sha256": (
+                dataset_manifest.get("split_sha256")
+                if dataset_manifest else None),
+            "training_mode": (
+                "frozen_residual_score_adapter" if is_adapter else "standard"),
+            **initialization_metadata,
+            **{
+                key: value for key, value in adapter_metadata.items()
+                if not key.endswith("_names")
+            },
         }
 
-    def _checkpoint_payload(epoch: int, sel: float, metrics: Dict[str, float]) -> Dict:
+    def _checkpoint_payload(
+        epoch: int,
+        sel: float,
+        metrics: Dict[str, float],
+        select_metric: Optional[str] = None,
+    ) -> Dict:
         return {
             "model_name": model_name,
             "model_kwargs": model_kwargs or {},
@@ -614,7 +1075,7 @@ def train_model(dataset_path: str,
             "feature_version": feature_version,
             "is_generator": gen,
             "epoch": epoch,
-            "select_metric": early_stop_metric,
+            "select_metric": select_metric or early_stop_metric,
             "metric": float(sel),
             "metrics": metrics,
             "requested_pos_weight": requested_pos_weight,
@@ -622,19 +1083,37 @@ def train_model(dataset_path: str,
             "train_positive_count": int(n_pos),
             "train_negative_count": int(n_neg),
             **_run_config(epoch, sel, metrics, time.time() - t0),
+            "select_metric": select_metric or early_stop_metric,
+            "best_metric_name": select_metric or early_stop_metric,
+            "best_metric_value": float(sel),
         }
 
     with open(log_path, "w", encoding="utf-8") as logf:
         for epoch in range(1, epochs + 1):
             model.train()
+            if is_adapter:
+                if any(module.training for module in model.frozen_base_modules().values()):
+                    raise RuntimeError(
+                        "adapter-v4 frozen module entered train mode")
+                if not model.score_adapter.training:
+                    raise RuntimeError("adapter-v4 adapter did not enter train mode")
             ep_logs: Dict[str, float] = {}
             nb = 0
             for batch in train_loader:
                 batch = move_batch(batch, device)
                 out = model(batch)
-                res = compute_loss(out, batch, weights, gen)
+                if model_name == "relseqgen":
+                    res = compute_relseqgen_loss(out, batch, weights, rq)
+                else:
+                    res = compute_loss(out, batch, weights, gen)
                 opt.zero_grad()
                 res["loss"].backward()
+                if is_adapter and any(
+                        parameter.grad is not None
+                        for name, parameter in model.named_parameters()
+                        if not name.startswith("score_adapter.")):
+                    raise RuntimeError(
+                        "adapter-v4 produced gradients for frozen parameters")
 
                 if debug_grad and nb < debug_batches:
                     with torch.no_grad():
@@ -670,7 +1149,7 @@ def train_model(dataset_path: str,
                                 "[debug-grad] 主要分支 grad norm 连续 5 次为 0, "
                                 "训练链路断裂 (梯度未回传)。")
 
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                torch.nn.utils.clip_grad_norm_(trainable_parameters, 5.0)
                 opt.step()
                 for k, v in res["logs"].items():
                     ep_logs[k] = ep_logs.get(k, 0.0) + float(v)
@@ -678,7 +1157,28 @@ def train_model(dataset_path: str,
             for k in ep_logs:
                 ep_logs[k] /= max(nb, 1)
 
+            if is_adapter:
+                current_frozen_hash = _state_hash({
+                    name: tensor for name, tensor in model.state_dict().items()
+                    if not name.startswith("score_adapter.")
+                })
+                if current_frozen_hash != frozen_state_reference:
+                    raise RuntimeError(
+                        "adapter-v4 changed frozen base state")
+                model.eval()
+                with torch.no_grad():
+                    current_frozen_output = model(frozen_check_batch)
+                for key, expected in frozen_output_reference.items():
+                    actual = current_frozen_output[key]
+                    if not _frozen_output_close(actual, expected):
+                        max_diff = float((actual - expected).abs().max().item())
+                        raise RuntimeError(
+                            f"adapter-v4 changed frozen {key} "
+                            f"(max_abs_diff={max_diff:.6e})")
             metrics = evaluate(model, val_loader, device, gen, topk=topk)
+            if gen:
+                metrics.update(evaluate_generator_loss(
+                    model, val_loader, device, model_name, weights, rq))
             sel = metrics.get(early_stop_metric, metrics["composite"])
             if sel is None or np.isnan(sel):
                 sel = metrics["composite"]
@@ -694,8 +1194,18 @@ def train_model(dataset_path: str,
                     f"rec@{topk}={metrics['recall_at_k']:.3f} "
                     f"prec@{topk}={metrics['precision_at_k']:.3f} "
                     f"topkAvg={metrics['topk_avg_score_norm']:.3f} "
-                    f"sp={metrics['score_spearman']:.3f} enr={metrics['enrichment']:.3f} "
+                    f"sp={metrics['score_spearman']:.3f} "
+                    f"pe={metrics['score_pearson']:.3f} "
+                    f"kt={metrics['score_kendall']:.3f} "
+                    f"rmse={metrics['score_rmse']:.4f} "
+                    f"std={metrics['score_pred_std']:.4f} "
+                    f"stdR={metrics['score_std_ratio']:.3f} "
+                    f"slope={metrics['score_regression_slope']:.3f} "
+                    f"enr={metrics['enrichment']:.3f} "
                     f"| comp={metrics['composite']:.4f} [{early_stop_metric}={sel:.4f}]")
+            if gen and "gen_val_loss" in metrics:
+                line += (f" | valGen={metrics['gen_val_loss']:.4f} "
+                         f"(xy={metrics['gen_val_xy']:.4f} st={metrics['gen_val_station']:.4f})")
             logf.write(line + "\n")
             logf.flush()
             if verbose and (epoch % max(1, epochs // 20) == 0 or epoch == 1):
@@ -710,6 +1220,25 @@ def train_model(dataset_path: str,
             else:
                 since_improve += 1
 
+            if save_metric_checkpoints:
+                for metric_name, state in auxiliary_best.items():
+                    value = metrics.get(metric_name)
+                    if value is None or np.isnan(value):
+                        continue
+                    improved = (
+                        float(value) < float(state["value"]) - min_delta
+                        if state["mode"] == "min"
+                        else float(value) > float(state["value"]) + min_delta)
+                    if improved:
+                        state["value"] = float(value)
+                        state["epoch"] = int(epoch)
+                        torch.save(
+                            _checkpoint_payload(
+                                epoch, float(value), metrics,
+                                select_metric=metric_name),
+                            str(state["path"]),
+                        )
+
             if early_stop_patience > 0 and since_improve >= early_stop_patience:
                 if verbose:
                     print(f"[train] early stop at epoch {epoch} "
@@ -720,12 +1249,24 @@ def train_model(dataset_path: str,
 
     wall_time_s = time.time() - t0
     config = _run_config(best_epoch, best_metric, best_metrics, wall_time_s)
+    auxiliary_selection = {
+        name: {
+            "best_value": (
+                None if not np.isfinite(float(state["value"]))
+                else float(state["value"])),
+            "best_epoch": int(state["epoch"]),
+            "checkpoint": os.path.abspath(str(state["path"])),
+        }
+        for name, state in auxiliary_best.items()
+    } if save_metric_checkpoints else {}
+    config["auxiliary_checkpoint_selection"] = auxiliary_selection
     metrics_out = {
         "best_epoch": best_epoch,
         "best_metric_name": early_stop_metric,
         "best_metric_value": float(best_metric),
         "training_time_seconds": wall_time_s,
         "parameter_count": int(n_params),
+        "auxiliary_checkpoint_selection": auxiliary_selection,
         **best_metrics,
     }
     with open(os.path.join(save_dir, "config.json"), "w", encoding="utf-8") as f:
@@ -766,6 +1307,7 @@ def train_model(dataset_path: str,
         "requested_pos_weight": requested_pos_weight,
         "effective_pos_weight": float(weights.pos_weight),
         "parameter_count": int(n_params),
+        "auxiliary_checkpoint_selection": auxiliary_selection,
         "wall_time_s": wall_time_s,
         "final_metrics": history[-1] if history else {},
         "history": history,

@@ -4,13 +4,30 @@
 生成 layout samples, 可行与不可行样本都保存 (不可行作为 feasibility classifier 的
 负样本)。每条样本写为一行 jsonl。
 
-用法示例:
+用法示例 (Tower / Totem / YuanChair 统一入口):
+    # Tower (默认 asmdef)
     python -m sealp.examples.layout.generate_layout_dataset \
-        --dataset-out sealp/examples/layout/_output/layout_dataset_center_cont.jsonl \
-        --gen-samples 1000 --gen-seeds 0,1,2,3,4 \
+        --output-jsonl sealp/examples/layout/_output/layout_dataset_v2_live.jsonl \
+        --gen-resume --gen-samples 1000 --gen-seeds 0,1,2,3,4 \
+        --gen-station-mode center_continuous
+
+    # Totem
+    python -m sealp.examples.layout.generate_layout_dataset \
+        --output-jsonl sealp/examples/layout/_output/totem_layout_v1.jsonl \
+        --overwrite --gen-samples 200 --gen-seeds 0,1 \
         --gen-station-mode center_continuous \
-        --gen-center-bias 0.65 --gen-center-sigma-frac 0.25 \
-        --cdprim-type box --global-max-evals 100000
+        --asmdef sealp/assembly_sequence/_demo_output/totem.asmdef \
+        --grasp-dir sealp/examples/grasp/totem_grasp \
+        --part-order base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross
+
+    # YuanChair
+    python -m sealp.examples.layout.generate_layout_dataset \
+        --output-jsonl sealp/examples/layout/_output/yuanchair_layout_v1.jsonl \
+        --overwrite --gen-samples 200 --gen-seeds 0,1 \
+        --gen-station-mode center_continuous --gen-assembly-type chair \
+        --asmdef sealp/assembly_sequence/_demo_output/yuanchair.asmdef \
+        --grasp-dir sealp/examples/grasp/yuanchair_grasp \
+        --part-order seat,leg_bl,leg_br,leg_fl,leg_fr
 
 装配站采样模式 (--gen-station-mode):
     center_continuous (默认) 连续可行域 + 中心优先 radial-shell 采样 (中心到外围渐进);
@@ -20,10 +37,13 @@
 其它相关参数:
     --gen-center-bias F        center_continuous: 中心采样概率 (其余 1-F 全域均匀), 默认 0.6;
     --gen-center-sigma-frac F  中心区尺度 / radial-shell 初始内环半径占比, 默认 0.25;
-    --gen-resume               安全续采: 扫描已落盘记录, 从每个 seed 的下一条继续;
+    --gen-resume               安全续采并追加: 扫描已落盘记录, 从每个 seed 的下一条继续;
+    --append / --gen-append    显式仅追加 (不恢复进度);
+    --overwrite                显式覆盖目标文件;
     --gen-threads N            限制 OMP/MKL/OpenBLAS 线程数, 适合低 CPU 长跑;
     --gen-fsync-every N        每 N 条做一次 fsync (默认 1, 最安全);
-    --gen-append               仅追加写, 不恢复 seed 进度 (保留兼容, 不推荐)。
+写入模式必须显式选择。包含 datasets/repro/frozen 的正式快照路径以及旧
+layout_dataset_v2.jsonl 均拒绝写入。
 
 说明: 其余参数(--asmdef/--config/--grasp-dir/--planner-obstacle-mode/... )
 与 find_optimal_initial_layout_tower_strict_pycharm / _global 完全一致。
@@ -37,7 +57,7 @@ import hashlib
 import shutil
 import sys
 import time
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def _configure_thread_env_from_argv() -> None:
@@ -69,10 +89,12 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-import find_optimal_initial_layout_tower_strict_pycharm as fol
+from sealp.examples.layout import find_optimal_initial_layout_tower_strict_pycharm as fol
 import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2
 import find_optimal_initial_layout_tower_global as gmod
+
+from layout_learning.generator_dataset import sample_schema_extensions
 
 LayoutCandidate = fol.LayoutCandidate
 
@@ -88,12 +110,38 @@ DCFG: Dict[str, object] = {
     "station_mode": "center_continuous",
     "center_sigma_frac": 0.25,  # 中心区尺度 / radial-shell 初始内环半径占比
     "append": False,            # 仅追加写; 不自动恢复进度
+    "overwrite": False,         # 显式覆盖写
     "resume": False,            # 扫描已有记录并按 seed 安全续采
+    "write_mode_explicit": False,
     "threads": None,            # BLAS/OpenMP 线程上限
     "fsync_every": 1,           # 每 N 条强制同步到磁盘; 1=最安全
     "max_errors": 20,           # 单次运行最多容忍的候选评估异常
     "assembly_type": "",        # 任务类型标签 (空=从 asmdef 名推断); 跨任务泛化用
 }
+
+
+def _count_jsonl_records(path: str) -> int:
+    if not os.path.isfile(path):
+        return 0
+    with open(path, "r", encoding="utf-8-sig") as stream:
+        return sum(1 for line in stream if line.strip())
+
+
+def _validate_dataset_output_path(path: str) -> None:
+    normalized = os.path.abspath(path).replace("\\", "/").lower()
+    basename = os.path.basename(normalized)
+    protected = (
+        "/datasets/" in normalized
+        or "repro" in basename
+        or "frozen" in basename
+        or basename == "layout_dataset_v2.jsonl"
+    )
+    if protected:
+        raise ValueError(
+            "拒绝把生成数据写入正式/历史实验数据路径: "
+            f"{os.path.abspath(path)}。请使用 "
+            "sealp/examples/layout/_output/layout_dataset_v2_live.jsonl "
+            "或 generated_runs/<run_name>.jsonl。")
 
 
 def _to_list(x) -> Optional[list]:
@@ -288,6 +336,45 @@ def _durable_write(fout, record: Dict, write_count: int, fsync_every: int) -> No
         os.fsync(fout.fileno())
 
 
+def _pose_candidates_for_part(searcher, pid: str, selected_tag: Optional[str],
+                              selected_rot: Optional[str]) -> List[Dict]:
+    """Serialize stable-pose candidates for generator schema (optional field)."""
+    cands = list(searcher.rot_cands.get(pid, []) or [])
+    out: List[Dict] = []
+    for c in cands:
+        fp = _to_list(getattr(c, "footprint", [0, 0]))
+        rot = np.asarray(getattr(c, "rotmat", np.eye(3)), dtype=float).reshape(-1).tolist()
+        out.append({
+            "pose_id": str(getattr(c, "tag", "unknown")),
+            "pose_tag": str(getattr(c, "tag", "unknown")),
+            "rot_name": str(getattr(c, "rot_name", "unknown")),
+            "rotmat": rot,
+            "footprint": fp,
+            "support_area": float(fp[0] * fp[1]) if len(fp) >= 2 else 0.0,
+            "support_area_ratio": 1.0,
+            "center_of_mass_height": float(getattr(c, "extent", [0, 0, 0])[2]) * 0.5
+            if hasattr(c, "extent") else 0.0,
+            "stable_probability": 1.0,
+            "grasp_total": float(getattr(c, "grasp_total", 0)),
+            "topdown_count": float(getattr(c, "topdown_count", 0)),
+        })
+    if not out and selected_tag is not None:
+        out.append({
+            "pose_id": str(selected_tag),
+            "pose_tag": str(selected_tag),
+            "rot_name": str(selected_rot or "unknown"),
+            "rotmat": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            "footprint": [0.05, 0.05],
+            "support_area": 0.0025,
+            "support_area_ratio": 1.0,
+            "center_of_mass_height": 0.01,
+            "stable_probability": 1.0,
+            "grasp_total": 0.0,
+            "topdown_count": 0.0,
+        })
+    return out[:8]
+
+
 def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
                           region: Tuple[str, Tuple[int, int], np.ndarray],
                           sample_index: int, generation_signature: str) -> Dict:
@@ -339,6 +426,11 @@ def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
             "per_part_dist": float(cand.per_part_dist.get(pid, 0.0)),
             "per_part_manip": float(cand.per_part_manip.get(pid, 0.0)),
             "per_part_rot_angle": float(cand.per_part_rot_angle.get(pid, 0.0)),
+            "pose_candidates": _pose_candidates_for_part(
+                searcher, pid,
+                cand.pose_tag.get(pid), cand.rot_name.get(pid)),
+            "target_pose_index": 0,
+            "target_rotation_index": 0,
         })
 
     # ---- 任务级元信息 (跨任务泛化用; 单 asmdef = 单任务) ----
@@ -352,7 +444,7 @@ def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
     tab_cy = 0.5 * (float(searcher.table_y_range[0]) + float(searcher.table_y_range[1]))
     station_dist_center = float(np.hypot(st_pos[0] - tab_cx, st_pos[1] - tab_cy))
 
-    return {
+    base = {
         "sample_id": _stable_sample_id(generation_signature, seed, sample_index),
         "sample_index": int(sample_index),
         "generation_signature": generation_signature,
@@ -384,6 +476,8 @@ def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
         "fail_part": getattr(cand, "fail_part", None),
         "fail_detail": dict(getattr(cand, "fail_detail", {}) or {}),
     }
+    base.update(sample_schema_extensions(base))
+    return base
 
 
 class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
@@ -395,6 +489,11 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
         out_path = str(DCFG["dataset_out"])
         if not out_path:
             raise RuntimeError("必须提供 --dataset-out。")
+        _validate_dataset_output_path(out_path)
+        if not bool(DCFG["write_mode_explicit"]):
+            raise ValueError(
+                "必须显式选择写入模式: --append / --overwrite / "
+                "--gen-resume（兼容别名: --gen-append）。")
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
         seeds = [int(s) for s in DCFG["seeds"]] or [int(seed)]
@@ -426,7 +525,9 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
                 self._assembly_region_candidates(), verbose=False)
 
         print("\n========== Layout Dataset Generation ==========")
-        print(f"dataset_out   = {out_path}  (mode={'append' if append else 'overwrite'})")
+        print(f"dataset_out   = {os.path.abspath(out_path)}")
+        print(f"write_mode    = {'resume/append' if resume else 'append' if append else 'overwrite'}")
+        print(f"existing_rows = {_count_jsonl_records(out_path)}")
         print(f"seeds         = {seeds}")
         print(f"gen_samples   = {n_per_seed} per seed")
         print(f"station_mode  = {mode}")
@@ -576,6 +677,10 @@ class DataCollectingSearcher(gmod.GlobalLayoutSearcher):
 
 def _consume_dataset_args() -> None:
     v = fast._consume_extra_value("--dataset-out")
+    alias = fast._consume_extra_value("--output-jsonl")
+    if v is not None and alias is not None and os.path.abspath(v) != os.path.abspath(alias):
+        raise ValueError("--dataset-out 与 --output-jsonl 指向不同文件")
+    v = alias if alias is not None else v
     if v is not None:
         DCFG["dataset_out"] = v
     v = fast._consume_extra_value("--gen-samples")
@@ -603,11 +708,26 @@ def _consume_dataset_args() -> None:
     v = fast._consume_extra_value("--gen-center-sigma-frac")
     if v is not None:
         DCFG["center_sigma_frac"] = float(v)
-    if fast._consume_extra_flag("--gen-append"):
+    append_flag = (
+        fast._consume_extra_flag("--gen-append")
+        or fast._consume_extra_flag("--append"))
+    overwrite_flag = fast._consume_extra_flag("--overwrite")
+    resume_flag = fast._consume_extra_flag("--gen-resume")
+    selected_modes = sum(bool(value) for value in (
+        append_flag, overwrite_flag, resume_flag))
+    if selected_modes > 1:
+        raise ValueError("--append/--overwrite/--gen-resume 只能选择一个")
+    if append_flag:
         DCFG["append"] = True
-    if fast._consume_extra_flag("--gen-resume"):
+        DCFG["write_mode_explicit"] = True
+    if overwrite_flag:
+        DCFG["overwrite"] = True
+        DCFG["append"] = False
+        DCFG["write_mode_explicit"] = True
+    if resume_flag:
         DCFG["resume"] = True
         DCFG["append"] = True
+        DCFG["write_mode_explicit"] = True
     v = fast._consume_extra_value("--gen-threads")
     if v is not None:
         DCFG["threads"] = max(1, int(v))
@@ -638,7 +758,8 @@ def main() -> None:
 
     if DCFG["dataset_out"] is None:
         DCFG["dataset_out"] = os.path.join(
-            gmod.fol.SEALP_ROOT, "examples", "layout", "_output", "layout_dataset.jsonl")
+            gmod.fol.SEALP_ROOT, "examples", "layout", "_output",
+            "layout_dataset_v2_live.jsonl")
 
     print("[dataset] config:")
     for k, val in DCFG.items():

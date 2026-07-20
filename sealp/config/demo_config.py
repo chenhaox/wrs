@@ -60,7 +60,7 @@ def main():
     mgm.gen_frame().attach_to(base)
 
     # Show robot
-    setup.robot.gen_meshmodel(alpha=0.7).attach_to(base)
+    setup.robot.gen_meshmodel(alpha=1).attach_to(base)
 
     # Show collision environment
     setup.collision_world.show(base, toggle_cdprim=False, alpha=0.6)

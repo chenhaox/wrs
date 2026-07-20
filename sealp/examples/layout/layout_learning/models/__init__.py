@@ -21,6 +21,9 @@ from .cvae_proposal import CVAEProposal
 from .diffusion_proposal import DiffusionProposal
 from .sagpn import SAGPN
 from .seqrel_layout_net import SeqRelLayoutNet
+from .dynaseqrel_layout_net import DynaSeqRelDynEdgeLayoutNet
+from .relseqgen import RelSeqGenLayoutNet
+from .part_placement_ranker import PartPlacementRankerNet
 
 # 名称 -> 构造器
 _REGISTRY = {
@@ -35,12 +38,15 @@ _REGISTRY = {
     "diffusion": DiffusionProposal,
     "sagpn": SAGPN,
     "seqrel": SeqRelLayoutNet,
+    "dynaseqrel_dynedge": DynaSeqRelDynEdgeLayoutNet,
+    "relseqgen": RelSeqGenLayoutNet,
+    "part_placement_ranker": PartPlacementRankerNet,
 }
 
 MODEL_NAMES = list(_REGISTRY.keys())
 
 # 生成式模型 (proposal) 集合
-GENERATOR_MODELS = {"cvae", "diffusion", "sagpn"}
+GENERATOR_MODELS = {"cvae", "diffusion", "sagpn", "relseqgen"}
 SCORER_MODELS = [m for m in MODEL_NAMES if m not in GENERATOR_MODELS]
 
 # 各模型 small / base 尺寸预设。small 用于小数据集 (参数量尽量 < 5万)。
@@ -52,6 +58,18 @@ _SIZE_PRESETS = {
     "seqrel": {
         "small": {"hidden": 48, "layers": 2, "dropout": 0.2},
         "base": {"hidden": 64, "layers": 2, "dropout": 0.15},
+    },
+    "dynaseqrel_dynedge": {
+        "small": {"hidden": 48, "layers": 2, "dropout": 0.2},
+        "base": {"hidden": 64, "layers": 2, "dropout": 0.2},
+    },
+    "relseqgen": {
+        "small": {"hidden": 64, "layers": 2, "heads": 2, "mixtures": 5, "dropout": 0.15},
+        "base": {"hidden": 128, "layers": 3, "heads": 4, "mixtures": 8, "dropout": 0.15},
+    },
+    "part_placement_ranker": {
+        "small": {"hidden": 64, "dropout": 0.2},
+        "base": {"hidden": 128, "dropout": 0.15},
     },
     "cvae": {
         "small": {"hidden": 64, "dropout": 0.2},
