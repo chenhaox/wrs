@@ -46,7 +46,14 @@ def _candidate_feature(xy: List[float],
     feat[0:2] = norm_xy
     feat[2:4] = offset
     feat[4] = float(pose_idx) / max(MAX_CANDIDATES - 1, 1)
-    feat[5] = float(np.clip(score, 0.0, 1.0))
+    # feat[5] intentionally left 0: the oracle ``score`` is only available while
+    # collecting (WRS eval). At inference candidates come from a raw grid with no
+    # oracle, so feeding score here would leak the label at train time and be a
+    # constant 0 at inference. The ranker must learn ordering from geometry
+    # (xy / offset / pose / bbox / goal) instead. ``score`` kept in the signature
+    # for backward compatibility but is not used as a feature.
+    _ = score
+    feat[5] = 0.0
     feat[6] = float(np.linalg.norm(norm_xy))
     feat[7] = 1.0
     return feat
