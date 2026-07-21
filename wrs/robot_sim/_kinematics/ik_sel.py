@@ -96,13 +96,16 @@ class SELIKSolver(object):
             return np.array([0])
 
     def _build_data(self):
-        # gen normalized qs first and then linearly scale to sampled qs
-        sample_number = 40320 if self.jlc.n_dof == 6 else 201600
-        print("Generating normalized uniform samples using CVT...")
-        normalized_qs = samply.hypercube.cvt(sample_number, self.jlc.n_dof)
-        print(f"Building Data for SELIK using CVT for {sample_number} uniform samples...")
-        sampled_qs = self.jlc.jnt_ranges[:, 0] + normalized_qs * (self.jlc.jnt_ranges[:, 1] - self.jlc.jnt_ranges[:, 0])
-
+        # gen sampled qs
+        sampled_jnts = []
+        n_intervals = np.linspace(8, 4, self.jlc.n_dof, endpoint=False)
+        print(f"Buidling Data for SELIK using the following joint granularity: {n_intervals.astype(int)}...")
+        for i in range(self.jlc.n_dof):
+            sampled_jnts.append(
+                np.linspace(self.jlc.jnt_ranges[i][0], self.jlc.jnt_ranges[i][1], int(n_intervals[i] + 2))[1:-1])
+        grid = np.meshgrid(*sampled_jnts)
+        sampled_qs = np.vstack([x.ravel() for x in grid]).T
+        # gen sampled qs and their correspondent flange poses
         query_data = []
         jnt_data = []
         jinv_data = []

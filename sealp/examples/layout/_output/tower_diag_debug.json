@@ -1,0 +1,269 @@
+{
+  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_diag.layout",
+  "score": 0.5681636033735508,
+  "xy": {
+    "base_plate": [
+      0.3725000035762787,
+      -0.35000000000000003
+    ],
+    "post_br": [
+      0.44251654090747206,
+      -0.05314627270668276
+    ],
+    "post_fr": [
+      0.26927068212792815,
+      -0.5854364988306187
+    ],
+    "post_bl": [
+      0.3712229518179725,
+      -0.054073368111192566
+    ],
+    "post_fl": [
+      0.13352360019755602,
+      -0.6599858383899518
+    ],
+    "middle_plate": [
+      0.3651678267376305,
+      -0.7665608043087456
+    ],
+    "top_cross": [
+      0.16577786667429484,
+      -0.42402274672540974
+    ]
+  },
+  "z_offset": {
+    "base_plate": 0.0,
+    "post_br": 0.01500833357870579,
+    "post_fr": 0.01500833357870579,
+    "post_bl": 0.003,
+    "post_fl": 0.01500833357870579,
+    "middle_plate": 0.08550000327825547,
+    "top_cross": 0.003
+  },
+  "pose_tag": {
+    "base_plate": "preassembled_at_assembly_region",
+    "post_br": "rot90_lifted",
+    "post_fr": "rot90_lifted",
+    "post_bl": "identity",
+    "post_fl": "rot90_lifted",
+    "middle_plate": "fs_upright_lifted",
+    "top_cross": "identity"
+  },
+  "rot_name": {
+    "base_plate": "goal_pose",
+    "post_br": "rot90_04",
+    "post_fr": "rot90_08",
+    "post_bl": "identity",
+    "post_fl": "rot90_08",
+    "middle_plate": "fs_03",
+    "top_cross": "identity"
+  },
+  "assembly_region_id": "r1_c2",
+  "assembly_region_rc": [
+    1,
+    2
+  ],
+  "assembly_station_pos": [
+    0.3725000035762787,
+    -0.35000000000000003,
+    0.0
+  ],
+  "filter_assembly_near_arms": false,
+  "assembly_region_rule": "3x3 centers are all tried; only preassembled first part collision with arm boxes can reject an assembly center",
+  "assembly_arm_x_clearance": 0.22,
+  "assembly_arm_y_clearance": 0.22,
+  "filter_staging_near_arms": true,
+  "staging_arm_x_clearance": 0.12,
+  "staging_arm_y_clearance": 0.12,
+  "arm_base_xy_map": {
+    "lft_arm_base": [
+      0.0,
+      0.0
+    ],
+    "rgt_arm_base": [
+      0.0,
+      -0.62
+    ]
+  },
+  "grasp_counts": {
+    "base_plate": 20,
+    "post_br": 18,
+    "post_fr": 20,
+    "post_bl": 49,
+    "post_fl": 30,
+    "middle_plate": 73,
+    "top_cross": 37
+  },
+  "arm_choice": {
+    "base_plate": "preassembled",
+    "post_br": "rgt",
+    "post_fr": "rgt",
+    "post_bl": "lft",
+    "post_fl": "lft",
+    "middle_plate": "rgt",
+    "top_cross": "lft"
+  },
+  "score_components": {
+    "grasp": 0.811591374066977,
+    "manip": 0.2561541475293735,
+    "dist": 0.6333735454754226,
+    "rot": 0.2938186684872348,
+    "spatial_y_distribution": 0.825
+  },
+  "spatial_constraints": {
+    "min_staging_mesh_clearance": 0.01,
+    "enforce_order_x_constraint": false,
+    "order_x_tolerance": 0.03,
+    "force_upright_when_topdown_low": true,
+    "topdown_min_count": 10,
+    "upright_rule": "if identity topdown(-Z) count < threshold, non-upright initial poses are forbidden",
+    "check_l2_pick_quick_motion": false,
+    "l2_pick_check_parts": [
+      "middle_plate"
+    ],
+    "l2_pick_check_lift_dist": 0.06,
+    "l2_pick_check_directions": [
+      "z",
+      "x_plus",
+      "x_minus",
+      "y_plus",
+      "y_minus"
+    ],
+    "l2_pick_check_tilt": 0.35,
+    "goal_y_side_biased_sampling": true,
+    "goal_y_side_bias_ratio": 0.75,
+    "goal_y_side_eps": 0.005,
+    "goal_y_side_rule": "if goal y is larger than other parts, prefer left half table; if smaller, prefer right half table; fallback to full table",
+    "robot_home_clearance": 0.03
+  },
+  "topdown_counts_identity": {
+    "post_br": 572,
+    "post_fr": 572,
+    "post_bl": 572,
+    "post_fl": 572,
+    "middle_plate": 0,
+    "top_cross": 296
+  },
+  "strict_initial_robot_collision": true,
+  "chosen_rotmat": {
+    "base_plate": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "post_br": [
+      [
+        1.0000000000000002,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        -1.0000000000000002
+      ],
+      [
+        0.0,
+        1.0000000000000002,
+        0.0
+      ]
+    ],
+    "post_fr": [
+      [
+        1.0000000000000002,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0000000000000002
+      ],
+      [
+        0.0,
+        -1.0000000000000002,
+        0.0
+      ]
+    ],
+    "post_bl": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "post_fl": [
+      [
+        1.0000000000000002,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0000000000000002
+      ],
+      [
+        0.0,
+        -1.0000000000000002,
+        0.0
+      ]
+    ],
+    "middle_plate": [
+      [
+        0.0,
+        0.7071067811865475,
+        0.7071067811865475
+      ],
+      [
+        0.0,
+        0.7071067811865475,
+        -0.7071067811865475
+      ],
+      [
+        -1.0,
+        0.0,
+        0.0
+      ]
+    ],
+    "top_cross": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  }
+}

@@ -15,7 +15,7 @@ grasp_collection = gpa.plan_gripper_grasps(gripper,
                                            rotation_interval=rm.radians(15),
                                            max_samples=20,
                                            min_dist_between_sampled_contact_points=.001,
-                                           contact_offset=.001,
+                                           contact_offset=.001 ,
                                            toggle_dbg=False)
 print(grasp_collection)
 grasp_collection.save_to_disk(file_name="cobotta_gripper_grasps.pickle")

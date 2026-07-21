@@ -92,7 +92,7 @@ def main():
     # Right arm object
     obj_r = mcm.gen_box(xyz_lengths=np.array([0.06, 0.04, 0.03]))
     obj_r.rgba = np.array([0.7, 0.4, 0.3, 1.0])
-    pick_pos_r = np.array([0.25, -0.20, 0.015])
+    pick_pos_r = np.array([0.25, -0.50, 0.015])
     obj_r.pos = pick_pos_r
     obj_r.rotmat = np.eye(3)
     obj_r.attach_to(base)
@@ -100,13 +100,13 @@ def main():
     # Left arm object
     obj_l = mcm.gen_box(xyz_lengths=np.array([0.06, 0.04, 0.03]))
     obj_l.rgba = np.array([0.3, 0.4, 0.7, 1.0])
-    pick_pos_l = np.array([0.25, 0.20, 0.015])
+    pick_pos_l = np.array([0.25, 0.10, 0.015])
     obj_l.pos = pick_pos_l
     obj_l.rotmat = np.eye(3)
     obj_l.attach_to(base)
 
     # Goal poses
-    goal_pos_r = np.array([0.35, -0.10, 0.015])
+    goal_pos_r = np.array([0.35, -0.70, 0.015])
     goal_rot_r = rm.rotmat_from_euler(0, 0, 0)
     goal_pos_l = np.array([0.35, 0.10, 0.015])
     goal_rot_l = rm.rotmat_from_euler(0, 0, 0)
@@ -151,11 +151,17 @@ def main():
             file_name=grasp_path)
     else:
         from sealp.examples.grasp.planning import plan_grasps
+        temp_pos = obj_r.pos
+        temp_rotmat = obj_r.rotmat
+        obj_r.pos = np.zeros(3)
+        obj_r.rotmat = np.eye(3)
+        # 抓取应该对放在基座标的物体进行！！！
         grasp_collection, _ = plan_grasps(obj_r, max_samples=50)
+        obj_r.pos = temp_pos
+        obj_r.rotmat = temp_rotmat
+
         os.makedirs(out_dir, exist_ok=True)
         grasp_collection.save_to_disk(file_name=grasp_path)
-
-    print(f"Grasps: {len(grasp_collection)}")
 
     # ------------------------------------------------------------------
     # 6. Plan motions for both arms

@@ -1,0 +1,17 @@
+﻿model,split_mode,feature_version,n_train,n_val,train_feasible_rate,best_epoch,roc_auc,pr_auc,recall_at_k,precision_at_k,topk_avg_true_score,topk_avg_score_norm,enrichment,score_spearman,composite,gap_roc_auc,gap_pr_auc,gap_recall_at_k,gap_composite,checkpoint_path
+mlp,random,v2,982,173,0.2342,78,0.7791,0.4465,0.1579,0.6,0.256,0.4951,2.7316,0.2216,0.3471,0.0,0.0,0.0,0.0,checkpoints/layout_models_transfer_v2\mlp_random\mlp_best.pt
+mlp,stratified,v2,982,173,0.2322,51,0.741,0.4679,0.175,0.7,0.1652,0.3125,3.0275,0.0555,0.3077,0.0381,-0.0214,-0.0171,0.0394,checkpoints/layout_models_transfer_v2\mlp_stratified\mlp_best.pt
+mlp,seed_holdout,v2,1047,108,0.2273,67,0.6603,0.3968,0.1667,0.5,0.222,0.4391,1.8,0.3593,0.3325,0.1188,0.0497,-0.0088,0.0146,checkpoints/layout_models_transfer_v2\mlp_seed_holdout\mlp_best.pt
+mlp,region_holdout,v2,1022,133,0.2084,6,0.5296,0.4519,0.0727,0.4,0.2892,0.5368,0.9673,0.2714,0.3371,0.2495,-0.0054,0.0852,0.01,checkpoints/layout_models_transfer_v2\mlp_region_holdout\mlp_best.pt
+deepsets,random,v2,982,173,0.2342,75,0.7815,0.4571,0.1316,0.5,0.2734,0.5287,2.2763,0.1658,0.3446,0.0,0.0,0.0,0.0,checkpoints/layout_models_transfer_v2\deepsets_random\deepsets_best.pt
+deepsets,stratified,v2,982,173,0.2322,87,0.7962,0.5264,0.175,0.7,0.3357,0.635,3.0275,0.4193,0.432,-0.0147,-0.0693,-0.0434,-0.0874,checkpoints/layout_models_transfer_v2\deepsets_stratified\deepsets_best.pt
+deepsets,seed_holdout,v2,1047,108,0.2273,14,0.6026,0.3611,0.1333,0.4,0.2472,0.4889,1.44,0.4541,0.3276,0.1789,0.096,-0.0017,0.017,checkpoints/layout_models_transfer_v2\deepsets_seed_holdout\deepsets_best.pt
+deepsets,region_holdout,v2,1022,133,0.2084,50,0.5879,0.5451,0.1455,0.8,0.3895,0.723,1.9345,0.1962,0.4259,0.1936,-0.088,-0.0139,-0.0813,checkpoints/layout_models_transfer_v2\deepsets_region_holdout\deepsets_best.pt
+gcn,random,v2,982,173,0.2342,9,0.6632,0.3032,0.0789,0.3,0.2871,0.5552,1.3658,0.3229,0.2883,0.0,0.0,0.0,0.0,checkpoints/layout_models_transfer_v2\gcn_random\gcn_best.pt
+gcn,stratified,v2,982,173,0.2322,74,0.7492,0.4228,0.15,0.6,0.3509,0.6637,2.595,0.112,0.3581,-0.086,-0.1196,-0.0711,-0.0698,checkpoints/layout_models_transfer_v2\gcn_stratified\gcn_best.pt
+gcn,seed_holdout,v2,1047,108,0.2273,9,0.5419,0.3329,0.1667,0.5,0.2384,0.4715,1.8,0.2133,0.2988,0.1213,-0.0297,-0.0878,-0.0105,checkpoints/layout_models_transfer_v2\gcn_seed_holdout\gcn_best.pt
+gcn,region_holdout,v2,1022,133,0.2084,28,0.5869,0.4702,0.0727,0.4,0.381,0.7073,0.9673,-0.0563,0.3457,0.0763,-0.167,0.0062,-0.0574,checkpoints/layout_models_transfer_v2\gcn_region_holdout\gcn_best.pt
+gat,random,v2,982,173,0.2342,13,0.6936,0.3539,0.1053,0.4,0.1565,0.3027,1.8211,0.0911,0.2428,0.0,0.0,0.0,0.0,checkpoints/layout_models_transfer_v2\gat_random\gat_best.pt
+gat,stratified,v2,982,173,0.2322,12,0.6929,0.4163,0.15,0.6,0.1495,0.2827,2.595,0.1694,0.285,0.0007,-0.0624,-0.0447,-0.0422,checkpoints/layout_models_transfer_v2\gat_stratified\gat_best.pt
+gat,seed_holdout,v2,1047,108,0.2273,8,0.6026,0.363,0.1667,0.5,0.2472,0.4889,1.8,0.2249,0.3155,0.091,-0.0091,-0.0614,-0.0727,checkpoints/layout_models_transfer_v2\gat_seed_holdout\gat_best.pt
+gat,region_holdout,v2,1022,133,0.2084,6,0.5541,0.453,0.0727,0.4,0.3943,0.7319,0.9673,-0.0569,0.3437,0.1395,-0.0991,0.0326,-0.1009,checkpoints/layout_models_transfer_v2\gat_region_holdout\gat_best.pt

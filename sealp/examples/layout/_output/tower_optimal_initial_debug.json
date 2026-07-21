@@ -1,0 +1,222 @@
+{
+  "layout_path": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\tower_optimal_initial.layout",
+  "score": 0.5558518008933453,
+  "xy": {
+    "seat": [
+      0.442969707111667,
+      -0.3661103181107134
+    ],
+    "leg_bl": [
+      0.2823046043606966,
+      -0.1682900134967346
+    ],
+    "leg_br": [
+      0.26042411304261115,
+      -0.7574924117753964
+    ],
+    "leg_fl": [
+      0.32323727810924796,
+      0.013291988103810992
+    ],
+    "leg_fr": [
+      0.13769886454449007,
+      -0.3561610355684459
+    ]
+  },
+  "z_offset": {
+    "seat": 0.0,
+    "leg_bl": 0.003,
+    "leg_br": 0.003,
+    "leg_fl": 0.003,
+    "leg_fr": 0.003
+  },
+  "pose_tag": {
+    "seat": "preassembled_at_assembly_region",
+    "leg_bl": "identity",
+    "leg_br": "identity",
+    "leg_fl": "identity",
+    "leg_fr": "identity"
+  },
+  "rot_name": {
+    "seat": "goal_pose",
+    "leg_bl": "identity",
+    "leg_br": "identity",
+    "leg_fl": "identity",
+    "leg_fr": "identity"
+  },
+  "assembly_region_id": "cont",
+  "assembly_region_rc": [
+    -1,
+    -1
+  ],
+  "assembly_station_pos": [
+    0.142969707111667,
+    -0.3661103181107134,
+    0.0
+  ],
+  "filter_assembly_near_arms": false,
+  "assembly_region_rule": "3x3 centers are all tried; only preassembled first part collision with arm boxes can reject an assembly center",
+  "assembly_arm_x_clearance": 0.22,
+  "assembly_arm_y_clearance": 0.22,
+  "filter_staging_near_arms": true,
+  "staging_arm_x_clearance": 0.12,
+  "staging_arm_y_clearance": 0.12,
+  "arm_base_xy_map": {
+    "lft_arm_base": [
+      0.0,
+      0.0
+    ],
+    "rgt_arm_base": [
+      0.0,
+      -0.62
+    ]
+  },
+  "grasp_counts": {
+    "seat": 20,
+    "leg_bl": 20,
+    "leg_br": 23,
+    "leg_fl": 23,
+    "leg_fr": 25
+  },
+  "arm_choice": {
+    "seat": "preassembled",
+    "leg_bl": "lft",
+    "leg_br": "rgt",
+    "leg_fl": "lft",
+    "leg_fr": "rgt"
+  },
+  "score_components": {
+    "grasp": 0.7690456953325226,
+    "manip": 0.17548545112562675,
+    "dist": 0.6484458005263404,
+    "rot": 1.0,
+    "spatial_y_distribution": 0.825
+  },
+  "spatial_constraints": {
+    "min_staging_mesh_clearance": 0.01,
+    "enforce_order_x_constraint": false,
+    "order_x_tolerance": 0.03,
+    "force_upright_when_topdown_low": true,
+    "topdown_min_count": 10,
+    "upright_rule": "if identity topdown(-Z) count < threshold, non-upright initial poses are forbidden",
+    "check_l2_pick_quick_motion": false,
+    "l2_pick_check_parts": [
+      "middle_plate"
+    ],
+    "l2_pick_check_lift_dist": 0.06,
+    "l2_pick_check_directions": [
+      "z",
+      "x_plus",
+      "x_minus",
+      "y_plus",
+      "y_minus"
+    ],
+    "l2_pick_check_tilt": 0.35,
+    "goal_y_side_biased_sampling": true,
+    "goal_y_side_bias_ratio": 0.75,
+    "goal_y_side_eps": 0.005,
+    "goal_y_side_rule": "if goal y is larger than other parts, prefer left half table; if smaller, prefer right half table; fallback to full table",
+    "robot_home_clearance": 0.03
+  },
+  "topdown_counts_identity": {
+    "leg_bl": 716,
+    "leg_br": 716,
+    "leg_fl": 716,
+    "leg_fr": 716
+  },
+  "strict_initial_robot_collision": true,
+  "chosen_rotmat": {
+    "seat": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "leg_bl": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "leg_br": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "leg_fl": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "leg_fr": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "search_eval_stats": {
+    "real_evals": 400,
+    "cache_hits": 0,
+    "first_l2_ok_eval": 1,
+    "best_score_eval": 180,
+    "best_score_seen_during_search": 0.5558518008933453
+  }
+}

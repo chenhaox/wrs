@@ -120,8 +120,13 @@ class DualTransportPrimitive(MotionPrimitive):
         n = len(goal_pose_list)
         pick_depart_direction = kwargs.get(
             "pick_depart_direction", rm.const.z_ax)
-        place_approach_distance_list = [approach_distance] * n
-        place_depart_distance_list = [depart_distance] * n
+        place_depart_direction_list = kwargs.get(
+            "place_depart_direction_list", [rm.const.z_ax] * n)
+        place_approach_distance_list = kwargs.get(
+            "place_approach_distance_list", [approach_distance] * n)
+        pick_depart_dist = kwargs.get("pick_depart_distance", depart_distance)
+        place_depart_distance_list = kwargs.get(
+            "place_depart_distance_list", [depart_distance] * n)
 
         # ── Plan right arm ───────────────────────────────────
         end_jnt_rgt = kwargs.get(
@@ -135,9 +140,10 @@ class DualTransportPrimitive(MotionPrimitive):
             start_jnt_values=start_jnt_rgt,
             end_jnt_values=end_jnt_rgt,
             pick_approach_distance=approach_distance,
-            pick_depart_distance=depart_distance,
+            pick_depart_distance=pick_depart_dist,
             pick_depart_direction=pick_depart_direction,
             place_approach_distance_list=place_approach_distance_list,
+            place_depart_direction_list=place_depart_direction_list,
             place_depart_distance_list=place_depart_distance_list,
             obstacle_list=obstacle_list,
             use_rrt=use_rrt,
@@ -161,9 +167,10 @@ class DualTransportPrimitive(MotionPrimitive):
             start_jnt_values=start_jnt_lft,
             end_jnt_values=end_jnt_lft,
             pick_approach_distance=approach_distance,
-            pick_depart_distance=depart_distance,
+            pick_depart_distance=pick_depart_dist,
             pick_depart_direction=pick_depart_direction,
             place_approach_distance_list=place_approach_distance_list,
+            place_depart_direction_list=place_depart_direction_list,
             place_depart_distance_list=place_depart_distance_list,
             obstacle_list=obstacle_list,
             use_rrt=use_rrt,

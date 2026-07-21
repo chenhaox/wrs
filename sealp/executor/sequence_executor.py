@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import pickle
 import wrs.modeling.collision_model as mcm
 import wrs.basis.robot_math as rm
 
@@ -182,9 +183,16 @@ class SequenceExecutor:
         If ``None``, basic defaults are used.
     obstacle_list : list or None
         Initial obstacles (ground plane, fixtures, etc.).
+    assembled_cd_ex_radius : float or None
+        If set, each successfully placed part is appended to the working
+        obstacle list with this CD primitive expansion (meters).  Larger
+        values make later steps stay farther from assembled geometry; ``None``
+        keeps the model default thickness (~2 mm).
     grasp_cache : dict or None
         Pre-loaded grasps: ``{model_alias: GraspCollection}``.
         If ``None``, grasps are planned on-the-fly.
+    grasp_paths : dict or None
+        Optional paths to pickled grasp files per model alias.
     """
 
     def __init__(self,
@@ -192,11 +200,15 @@ class SequenceExecutor:
                  assembly_def: AssemblyDef,
                  task_plan: Optional[TaskPlan] = None,
                  obstacle_list: Optional[List] = None,
-                 grasp_cache: Optional[Dict] = None):
+                 grasp_cache: Optional[Dict] = None,
+                 grasp_paths: Optional[Dict[str, str]] = None,
+                 assembled_cd_ex_radius: Optional[float] = None):
         self.assembly_def = assembly_def
         self.task_plan = task_plan
         self._initial_obstacles = list(obstacle_list or [])
+        self._assembled_cd_ex_radius = assembled_cd_ex_radius
         self._grasp_cache = dict(grasp_cache or {})
+        self._grasp_paths = dict(grasp_paths or {})
 
         # ── Detect robot type ────────────────────────────────
         self._is_dual = hasattr(robot, 'rgt_arm') and hasattr(robot, 'lft_arm')
@@ -282,11 +294,26 @@ class SequenceExecutor:
                 if step_result.end_conf_lft is not None:
                     current_conf_lft = step_result.end_conf_lft
 
-                # Add placed part to obstacles
+                # Add placed part to obstacles (optional inflated CD for later steps)
                 goal_pos, goal_rotmat = world_poses[step.part_id]
                 placed = self._get_part_cmodel(step.part_id).copy()
                 placed.pos = goal_pos
                 placed.rotmat = goal_rotmat
+                if self._assembled_cd_ex_radius is not None:
+                    try:
+                        placed.change_cdprim_type(
+                            cdprim_type=placed.cdprim_type,
+                            ex_radius=self._assembled_cd_ex_radius,
+                        )
+                    except Exception as _err:
+                        # 不再静默吞异常 —— 让上层看到 cdprim 重建失败的真实
+                        # 原因。即使失败，placed 仍以原始 cdprim 加入 obs_list，
+                        # 不阻塞执行，但避障会比预期严格不足。
+                        print(f"  [WARN] {step.part_id} change_cdprim_type "
+                              f"(ex_radius={self._assembled_cd_ex_radius}) "
+                              f"failed: {_err!r}")
+                placed._sealp_role = "assembled_at_goal"
+                placed._sealp_part_id = step.part_id
                 obs_list.append(placed)
                 print(f"  ✅ Success ({step_result.n_frames} frames)")
             else:
@@ -382,6 +409,7 @@ class SequenceExecutor:
             approach_distance=approach_dist,
             depart_distance=depart_dist,
             use_rrt=True,
+            part_id=part_id,
         )
 
         if primitive_type == Primitive.SINGLE_ARM_TRANSPORT:
@@ -444,12 +472,42 @@ class SequenceExecutor:
         return np.zeros(3), np.eye(3)
 
     # ── Grasp management ─────────────────────────────────────
+    # def _get_grasps(self, model_alias: str, obj_cmodel):
+    #     """Get or plan grasps for a model alias."""
+    #     if model_alias in self._grasp_cache:
+    #         return self._grasp_cache[model_alias]
+    #
+    #     # Plan grasps on-the-fly
+    #     print(f"  Planning grasps for model {model_alias!r}...")
+    #     try:
+    #         from sealp.examples.grasp.planning import plan_grasps
+    #         grasp_collection, _ = plan_grasps(
+    #             obj_cmodel, max_samples=50)
+    #         self._grasp_cache[model_alias] = grasp_collection
+    #         print(f"  Planned {len(grasp_collection)} grasps.")
+    #         return grasp_collection
+    #     except Exception as e:
+    #         print(f"  ERROR planning grasps: {e}")
+    #         return None
+
+    # ── Grasp management ─────────────────────────────────────
     def _get_grasps(self, model_alias: str, obj_cmodel):
         """Get or plan grasps for a model alias."""
         if model_alias in self._grasp_cache:
             return self._grasp_cache[model_alias]
-
-        # Plan grasps on-the-fly
+        if model_alias in self._grasp_paths:
+            file_path = self._grasp_paths[model_alias]
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                print(f"  [底层拦截] 正在从自定义路径加载 {model_alias!r} 的抓取数据...")
+                print(f"  路径: {file_path}")
+                with open(file_path, 'rb') as f:
+                    grasps = pickle.load(f)
+                    self._grasp_cache[model_alias] = grasps
+                    print(f"成功加载 {len(grasps)} 个姿态！")
+                    return grasps
+            else:
+                print(f"  [底层警告] 指定的路径不存在或文件为空: {file_path}")
+                print(f"  将退回使用实时盲算！")
         print(f"  Planning grasps for model {model_alias!r}...")
         try:
             from sealp.examples.grasp.planning import plan_grasps

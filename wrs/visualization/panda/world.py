@@ -83,7 +83,8 @@ class World(ShowBase, object):
         self.render.setLight(self._ptlightnode2)
         # set up inputmanager
         self.lookat_pos = lookat_pos
-        self.inputmgr = im.InputManager(self, self.lookat_pos, toggle_rotcenter=True)
+        # self.inputmgr = im.InputManager(self, self.lookat_pos, toggle_rotcenter=True)
+        self.inputmgr = im.InputManager(self, self.lookat_pos, toggle_rotcenter=False)
         taskMgr.add(self._interaction_update, "interaction", appendTask=True)
         # set up rotational cam
         if auto_rotate:

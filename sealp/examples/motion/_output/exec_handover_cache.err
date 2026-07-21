@@ -1,0 +1,5 @@
+Known pipe types:
+  wglGraphicsPipe
+(all display modules loaded.)
+:display:windisplay(warning): SetForegroundWindow() failed!
+:display:windisplay(warning): SetForegroundWindow() failed!

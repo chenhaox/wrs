@@ -133,7 +133,7 @@ def main():
     ground = mcm.gen_box(
         xyz_lengths=rm.vec(2, 2, 0.01),
         rgb=rm.vec(0.75, 0.75, 0.75), alpha=1)
-    ground.pos = np.array([0.3, 0, -0.005])
+    ground.pos = np.array([0.3, 0, -0.01])
     ground.attach_to(base)
 
     # ------------------------------------------------------------------
@@ -174,8 +174,8 @@ def main():
 
     # Staging positions (from pick_and_place_chair.py)
     plan.set_staging("seat",   pos=np.array([0.30,  0.00, 0.00]))
-    plan.set_staging("leg_fl", pos=np.array([0.10,  0.20, 0.00]))
-    plan.set_staging("leg_fr", pos=np.array([0.05, -0.24, 0.00]))
+    plan.set_staging("leg_fl", pos=np.array([0.15,  0.25, 0.00]))
+    plan.set_staging("leg_fr", pos=np.array([0.2, -0.24, 0.00]))
     plan.set_staging("leg_bl", pos=np.array([0.25,  0.24, 0.00]))
     plan.set_staging("leg_br", pos=np.array([0.25, -0.24, 0.00]))
 
@@ -184,7 +184,7 @@ def main():
         plan.set_step_params(StepParams(
             step_id=i,
             primitive="single_arm_transport",
-            approach_distance=0.02,
+            approach_distance=0.06,
             depart_distance=0.02,
         ))
 
@@ -240,6 +240,35 @@ def main():
     robot = psa.PiperSglArm(enable_cc=True)
     robot.gen_meshmodel(alpha=0.2).attach_to(base)
 
+    initial_obstacles = [ground]
+
+    for pid in asm.part_ids:
+        staging = plan.get_staging(pid)
+        if staging is None:
+            continue
+        model_path = asm.model_path(pid)
+        if os.path.isfile(model_path):
+            staged_obs = mcm.CollisionModel(initor=model_path)
+            staged_obs.pos = staging.pos
+            staged_obs.rotmat = staging.rotmat
+            initial_obstacles.append(staged_obs)
+    # import pickle
+    #
+    # # 1. 填入你想要使用的、由 filtering.py 过滤好的新 pickle 文件路径
+    # leg_pickle_path = r"D:\Project\wrs-sealp\sealp\examples\grasp\_output\demo_yuanchair-part2_filter_grasps.pickle"
+    # seat_pickle_path = r"D:\Project\wrs-sealp\sealp\examples\grasp\_output\demo_yuanchair-part1_filter_grasps.pickle"
+    # custom_grasp_cache = {}
+    # if os.path.exists(leg_pickle_path):
+    #     with open(leg_pickle_path, 'rb') as f:
+    #         custom_grasp_cache['leg_model'] = pickle.load(f)
+    #         print(f"[INFO] 成功加载椅腿抓取数据: {len(custom_grasp_cache['leg_model'])} 个")
+    # else:
+    #     print(f"[WARNING] 找不到椅腿抓取文件: {leg_pickle_path}")
+    # if os.path.exists(seat_pickle_path):
+    #     with open(seat_pickle_path, 'rb') as f:
+    #         custom_grasp_cache['seat_model'] = pickle.load(f)
+    #         print(f"[INFO] 成功加载座椅抓取数据: {len(custom_grasp_cache['seat_model'])} 个")
+
     # ------------------------------------------------------------------
     # 6. Execute
     # ------------------------------------------------------------------
@@ -248,6 +277,10 @@ def main():
         assembly_def=asm,
         task_plan=plan,
         obstacle_list=[ground],
+        grasp_paths={
+            'leg_model': r"D:\Project\wrs-sealp\sealp\examples\grasp\_output\demo_yuanchair-part2_filter_grasps.pickle",
+            'seat_model': r"D:\Project\wrs-sealp\sealp\examples\grasp\_output\demo_yuanchair-part1_grasps.pickle"
+        }
     )
 
     print("\nExecuting assembly sequence...")

@@ -15,6 +15,7 @@ from tqdm import tqdm
 # TODO joint gl -> flange
 
 class JLChain(object):
+
     """
     Joint Link Chain, no branches allowed
     Usage:

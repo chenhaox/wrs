@@ -71,12 +71,8 @@ import numpy as np
 import wrs.basis.robot_math as rm
 import wrs.robot_sim.manipulators.manipulator_interface as mi
 import wrs.modeling.geometric_model as mgm
+import wrs.visualization.panda.world as wd
 import wrs.modeling.collision_model as mcm
-
-
-# Attempt to import the Trac IK solver.  If unavailable, numerical IK
-# provided by the joint linkage controller (JLC) will be used instead.
-
 
 try:
     from trac_ik import TracIK
@@ -138,7 +134,7 @@ class Piper(mi.ManipulatorInterface):
         # rotation sequence from URDF: roll=1.5708, pitch=-0.034907, yaw=-1.5708
         self.jlc.jnts[1].loc_rotmat = rm.rotmat_from_euler(1.5708, -0.034907, -1.5708)
         self.jlc.jnts[1].loc_motion_ax = np.array([0.0, 0.0, 1.0])
-        self.jlc.jnts[1].motion_range = np.array([0.0, 3.14])
+        self.jlc.jnts[1].motion_range = np.array([-0.1, 3.14])
         self.jlc.jnts[1].lnk.cmodel = mcm.CollisionModel(
             os.path.join(current_file_dir, "meshes", "link2.STL"))
         self.jlc.jnts[1].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
@@ -153,8 +149,7 @@ class Piper(mi.ManipulatorInterface):
         self.jlc.jnts[2].loc_motion_ax = np.array([0.0, 0.0, 1.0])
         self.jlc.jnts[2].motion_range = np.array([-2.697, 0.0])
         self.jlc.jnts[2].lnk.cmodel = mcm.CollisionModel(
-            os.path.join(current_file_dir, "meshes", "link3.STL"),
-            cdprim_type=mcm.const.CDPrimType.USER_DEFINED, userdef_cdprim_fn=self._custom_cdprimitive_lnk3_fn)
+            os.path.join(current_file_dir, "meshes", "link3.STL"))
         self.jlc.jnts[2].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         # link3 has a yaw offset of −1.75 rad on the collision mesh【338922380148493†L134-L137】
         self.jlc.jnts[2].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, -1.75)
@@ -219,31 +214,23 @@ class Piper(mi.ManipulatorInterface):
         else:
             self._ik_solver = None
 
+        # ── TracIK 抗抽风：多 seed 重试配置（默认关闭）───────
+        # TracIK 内部用随机种子做 SQP/Newton 迭代，timeout 内只抽一次，
+        # 临近关节限位的目标偶尔 return None。下面提供"显式启用"的
+        # 多 seed 重试机制：``ik()`` 主调用失败时按 home_conf -> N 个
+        # 随机 seed 多试几次，任一成功即返回。
+        #
+        # 默认 ``_ik_retry_n = 0`` —— 行为与原代码完全一致，避免给
+        # ``reason_common_gids`` 这类批量 IK 调用引入 5-10x 失败延迟。
+        # 调用方（如 fast_layout_search）想要抗抽风时显式设置：
+        #     arm._ik_retry_n = 4
+        # 失败成本 ≈ retry_n * timeout（仅当 trac_ik 主调用 None 时）。
+        self._ik_retry_n = 0
+        self._ik_rng = np.random.default_rng(0)
+
         # Set up collision checking (self‑collision) if requested
         if self.cc is not None:
             self.setup_cc()
-
-    @staticmethod
-    def _custom_cdprimitive_lnk3_fn(name, ex_radius):
-        pdcnd = mcm.CollisionNode(name + "_cnode")
-        collision_primitive_c0 = mcm.CollisionBox(mcm.Point3(0.0, 0.0, 0.0),
-                                                  x=0.03 + ex_radius, y=0.03 + ex_radius, z=0.037 + ex_radius)
-        pdcnd.addSolid(collision_primitive_c0)
-        collision_primitive_c1 = mcm.CollisionBox(mcm.Point3(-0.015, -0.04, 0.0),
-                                                  x=0.025 + ex_radius, y=0.015 + ex_radius, z=0.041 + ex_radius)
-        pdcnd.addSolid(collision_primitive_c1)
-        collision_primitive_c2 = mcm.CollisionBox(mcm.Point3(-0.02, -0.1, 0.0),
-                                                  x=0.02 + ex_radius, y=0.06 + ex_radius, z=0.024 + ex_radius)
-        pdcnd.addSolid(collision_primitive_c2)
-        collision_primitive_c3 = mcm.CollisionBox(mcm.Point3(-0.022, -0.182, 0.0),
-                                                  x=0.029 + ex_radius, y=0.033 + ex_radius, z=0.029 + ex_radius)
-        pdcnd.addSolid(collision_primitive_c3)
-        collision_primitive_c4 = mcm.CollisionBox(mcm.Point3(-0.054, -0.175, 0.0),
-                                                  x=0.003 + ex_radius, y=0.01 + ex_radius, z=0.01 + ex_radius)
-        pdcnd.addSolid(collision_primitive_c4)
-        cdprim = mcm.NodePath(name + "_cdprim")
-        cdprim.attachNewNode(pdcnd)
-        return cdprim
 
     def setup_cc(self) -> None:
         """Configure pairs of links for self‑collision checking."""
@@ -257,9 +244,8 @@ class Piper(mi.ManipulatorInterface):
         l2 = self.cc.add_cce(self.jlc.jnts[2].lnk)
         l3 = self.cc.add_cce(self.jlc.jnts[3].lnk)
         l4 = self.cc.add_cce(self.jlc.jnts[4].lnk)
-        # l5 = self.cc.add_cce(self.jlc.jnts[5].lnk)
-        from_list = [l3, l4]
-        into_list = [lb, l0, l1, l2]
+        from_list = [l3,l4]
+        into_list = [ l0, l1]
         self.cc.set_cdpair_by_ids(from_list, into_list)
 
     def ik(self, tgt_pos: np.ndarray, tgt_rotmat: np.ndarray,
@@ -289,8 +275,34 @@ class Piper(mi.ManipulatorInterface):
                 self.jlc.anchor.pos, self.jlc.anchor.rotmat))
             tgt_homomat = anchor_inv_homomat.dot(rm.homomat_from_posrot(tgt_pos, tgt_rotmat))
             tgt_pos, tgt_rotmat = tgt_homomat[:3, 3], tgt_homomat[:3, :3]
-            seed_jnt_values = self.home_conf if seed_jnt_values is None else seed_jnt_values.copy()
-            return self._ik_solver.ik(tgt_pos, tgt_rotmat, seed_jnt_values=seed_jnt_values)
+            # —— 主调用：用调用方传的 seed（或 home_conf）—————————
+            primary_seed = (self.home_conf if seed_jnt_values is None
+                            else np.asarray(seed_jnt_values).copy())
+            result = self._ik_solver.ik(tgt_pos, tgt_rotmat,
+                                         seed_jnt_values=primary_seed)
+            if result is not None:
+                return result
+            # —— 抽风兜底：仅当显式启用 (_ik_retry_n > 0) 时多 seed 重试 ──
+            # 顺序：home_conf（若主 seed 不是它）→ N 个随机关节值
+            # 任一成功立即返回；全部失败仍 return None（与原行为兼容）。
+            retry_n = int(getattr(self, "_ik_retry_n", 0))
+            if retry_n <= 0:
+                return None
+            tried_home = bool(np.allclose(primary_seed, self.home_conf))
+            if not tried_home:
+                result = self._ik_solver.ik(
+                    tgt_pos, tgt_rotmat,
+                    seed_jnt_values=self.home_conf.copy())
+                if result is not None:
+                    return result
+            jr = self.jnt_ranges
+            for _ in range(retry_n):
+                rand_seed = self._ik_rng.uniform(jr[:, 0], jr[:, 1])
+                result = self._ik_solver.ik(
+                    tgt_pos, tgt_rotmat, seed_jnt_values=rand_seed)
+                if result is not None:
+                    return result
+            return None
         else:
             # fall back to numerical IK provided by the JLC
             return self.jlc.ik(tgt_pos=tgt_pos,
@@ -299,24 +311,47 @@ class Piper(mi.ManipulatorInterface):
                                toggle_dbg=toggle_dbg)
 
 
+# if __name__ == '__main__':
+#     import wrs.visualization.panda.world as wd
+#
+#     base = wd.World(cam_pos=[2, 0, 1], lookat_pos=[0, 0, 0])
+#     arm = Piper()
+#     # arm.gen_meshmodel().attach_to(base)
+#     mgm.gen_frame().attach_to(base)
+#
+#     tgt_pos = np.array([0.378, -0.099417, 0.157612])
+#     tgt_rotmat = rm.rotmat_from_euler(3.0369, -0.0483, 2.7970)
+#     mgm.gen_frame(pos=tgt_pos, rotmat=tgt_rotmat).attach_to(base)
+#     jnt_values = arm.ik(tgt_pos=tgt_pos, tgt_rotmat=tgt_rotmat, toggle_dbg=False)
+#     print(jnt_values)
+#     if jnt_values is not None:
+#         arm.goto_given_conf(jnt_values=jnt_values)
+#         arm.gen_meshmodel(alpha=1, toggle_tcp_frame=True).attach_to(base)
+#     else:
+#         print(1111)
+#     arm.gen_meshmodel().attach_to(base)
+#     # arm.show_cdprim()
+#     base.run()
 if __name__ == '__main__':
-    import wrs.visualization.panda.world as wd
-
     base = wd.World(cam_pos=[2, 0, 1], lookat_pos=[0, 0, 0])
-    arm = Piper(enable_cc=True)
-    # arm.gen_meshmodel().attach_to(base)
-    mgm.gen_frame().attach_to(base)
-    arm.show_cdprim()
-    tgt_pos = np.array([0.378, -0.099417, 0.157612])
-    tgt_rotmat = rm.rotmat_from_euler(3.0369, -0.0483, 2.7970)
-    mgm.gen_frame(pos=tgt_pos, rotmat=tgt_rotmat).attach_to(base)
-    jnt_values = arm.ik(tgt_pos=tgt_pos, tgt_rotmat=tgt_rotmat, toggle_dbg=False)
-    print(jnt_values)
-    if jnt_values is not None:
-        arm.goto_given_conf(jnt_values=jnt_values)
-        arm.gen_meshmodel(alpha=1, toggle_tcp_frame=True).attach_to(base)
-    else:
-        print(1111)
+    arm = Piper(enable_cc = True)
+    # arm.goto_given_conf(np.array([ 0.02003638,  1.81482826, -1.24311076, -0.06082472,  1.16155152,
+    #    -0.20125392]))
+    arm.goto_given_conf(np.array([0,0,0,0,0,0]))
     arm.gen_meshmodel().attach_to(base)
+    mcm.gen_box(xyz_lengths=np.array([0.5, 0.6, 0.03]),
+                                       pos=rm.vec(0, 0, 0.6),
+                                       rotmat=np.eye(3),
+                                       rgb=[0.1, 0.1, 0.2],
+                                       alpha=0.8).attach_to(base)
+
+    mcm.gen_box(xyz_lengths=np.array([0.5, 0.6, 0.06]),
+                pos=rm.vec(0, 0, -0.04),
+                rotmat=np.eye(3),
+                rgb=[0.1, 0.1, 0.2],
+                alpha=0.8).attach_to(base)
+
+    print(arm.is_collided())
     # arm.show_cdprim()
+    arm.gen_stickmodel(toggle_jnt_frames=True,toggle_tcp_frame=True).attach_to(base)
     base.run()

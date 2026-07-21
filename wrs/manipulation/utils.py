@@ -5,7 +5,7 @@ def draw_graph(graph):
     for node_tuple in graph.edges:
         node1_plot_xy = graph.nodes[node_tuple[0]]['plot_xy']
         node2_plot_xy = graph.nodes[node_tuple[1]]['plot_xy']
-        print(node1_plot_xy, node2_plot_xy)
+        # print(node1_plot_xy, node2_plot_xy)
         if graph.edges[node_tuple]['type'] == 'transit':
             plt.plot([node1_plot_xy[0], node2_plot_xy[0]], [node1_plot_xy[1], node2_plot_xy[1]], 'c-')
         elif graph.edges[node_tuple]['type'] == 'transfer':

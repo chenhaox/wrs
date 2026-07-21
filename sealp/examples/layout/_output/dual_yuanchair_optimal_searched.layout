@@ -1,0 +1,234 @@
+# SEALP Workspace Layout v1.0
+# dual_yuanchair_optimal_searched
+
+format_version: '1.0'
+name: dual_yuanchair_optimal_searched
+robot_base:
+  pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+assembly_station:
+  pos:
+  - !!float '0'
+  - -0.3
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+staging:
+  seat:
+    pos:
+    - 0.330587
+    - -0.214327
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  leg_bl:
+    pos:
+    - 0.446111
+    - 0.0620789
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  leg_br:
+    pos:
+    - 0.460442
+    - -0.649003
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  leg_fl:
+    pos:
+    - 0.523769
+    - 0.0685907
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  leg_fr:
+    pos:
+    - 0.491287
+    - -0.858656
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+metadata:
+  search_method: random_optimal
+  n_samples: 20
+  robot_type: panthera_ht
+  arm_y_offset: 0.62
+  weights:
+    grasp: 0.3
+    manip: 0.1
+    manip_ep: 0.1
+    manip_traj: 0.4
+    dist: 0.2
+  norm_targets:
+    grasp_min: !!float '15'
+    grasp_mean: !!float '25'
+    grasp_hill_k: !!float '2'
+    grasp_min_weight: 0.7
+    manip: 0.03
+    manip_traj: 0.02
+    dist_decay: 0.5
+    n_traj_waypoints: 8
+  score_components:
+    per_part_manip:
+      seat: !!float '0'
+      leg_bl: 0.00573854
+      leg_br: 0.00505657
+      leg_fl: 0.00670097
+      leg_fr: !!float '0'
+    per_part_dist:
+      seat: 0.0909695
+      leg_bl: 0.255437
+      leg_br: 0.245086
+      leg_fl: 0.422694
+      leg_fr: 0.540801
+    per_part_traj_min:
+      seat: 0.0213984
+      leg_bl: 0.0169868
+      leg_br: 0.00965024
+      leg_fl: 0.00710875
+      leg_fr: 0.00792955
+    per_part_traj_mean:
+      seat: 0.0228347
+      leg_bl: 0.0175382
+      leg_br: 0.0120075
+      leg_fl: 0.0132137
+      leg_fr: 0.0134322
+    per_part_traj_curve:
+      seat:
+      - 0.0213984
+      - 0.0223367
+      - 0.0229342
+      - 0.0232659
+      - 0.0233868
+      - 0.0233388
+      - 0.023155
+      - 0.0228621
+      leg_bl:
+      - 0.0181223
+      - 0.0175403
+      - 0.0171526
+      - 0.0169868
+      - 0.0170479
+      - 0.0173225
+      - 0.0177774
+      - 0.0183555
+      leg_br:
+      - 0.00965024
+      - 0.0103413
+      - 0.0109066
+      - 0.0114829
+      - 0.0121379
+      - 0.0129045
+      - 0.0138008
+      - 0.0148357
+      leg_fl:
+      - 0.0232371
+      - 0.0202389
+      - 0.0165566
+      - 0.0130556
+      - 0.0101964
+      - 0.00817972
+      - 0.00710875
+      - 0.00713635
+      leg_fr:
+      - 0.0216378
+      - 0.020665
+      - 0.016924
+      - 0.0129393
+      - 0.0098249
+      - 0.00805856
+      - 0.00792955
+      - 0.00947855
+    avg_manip: 0.00349922
+    avg_dist: 0.310997
+    traj_manip_min_avg: 0.0126147
+  filters:
+    min_same_arm_dist: 0.05
+  arm_choice:
+    seat: rgt
+    leg_bl: lft
+    leg_br: rgt
+    leg_fl: lft
+    leg_fr: rgt
+  grasp_counts:
+    seat: 12
+    leg_bl: 57
+    leg_br: 56
+    leg_fl: 32
+    leg_fr: 21
+  pose_tags:
+    seat: 直立
+    leg_bl: 直立
+    leg_br: 直立
+    leg_fl: 直立
+    leg_fr: 直立
+  z_offsets:
+    seat: !!float '0'
+    leg_bl: !!float '0'
+    leg_br: !!float '0'
+    leg_fl: !!float '0'
+    leg_fr: !!float '0'
+  manipulability_avg: 0.00349922
+  distance_cost: 0.310997
+  total_score: 0.447731

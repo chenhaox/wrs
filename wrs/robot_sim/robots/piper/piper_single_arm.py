@@ -4,10 +4,8 @@
 # @Author : ZhangXi
 import math
 import numpy as np
-import wrs.motion.probabilistic.rrt_connect as rrtc
-import wrs.robot_sim.robots.single_arm_robot_interface as sari
-
 import wrs.basis.robot_math as rm
+import wrs.robot_sim.robots.single_arm_robot_interface as sari
 from wrs.robot_sim.manipulators.piper.piper import Piper
 from wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper import PiperGripper
 import wrs.modeling.geometric_model as mgm
@@ -34,15 +32,12 @@ class PiperSglArm(sari.SglArmRobotInterface):
         # self.manipulator._ik_solver = None
         # self.manipulator.is_trac_ik = False
 
-        compensation_rotmat = rm.rotmat_from_euler(0, 0, math.pi / 2)  #
-
-        # 将法兰的旋转矩阵与修正旋转矩阵相乘
-        # 注意：这里假设您希望夹爪的局部坐标系（rotmat）相对于机械臂法兰（self.manipulator.gl_flange_rotmat）进行旋转
-        corrected_rotmat = np.dot(self.manipulator.gl_flange_rotmat, compensation_rotmat)  #
+        # compensation_rotmat = rm.rotmat_from_euler(0, 0, math.pi / 2)
+        # corrected_rotmat = np.dot(self.manipulator.gl_flange_rotmat, compensation_rotmat)  #
 
         self.end_effector = PiperGripper(
             pos=self.manipulator.gl_flange_pos,
-            rotmat=corrected_rotmat,
+            rotmat=self.manipulator.gl_flange_rotmat,
             name=name + "_piper_gripper")
 
         # 设置工具中心点（TCP）
@@ -52,38 +47,38 @@ class PiperSglArm(sari.SglArmRobotInterface):
             self.setup_cc()
 
     def setup_cc(self):
-        """Setup collision detection — matching Cobotta/XArm7 pattern.
+        """设置自碰撞 + 对外障碍碰撞检测，参考 RealmanR / xarm7_dual。
 
-        Three collision detection mechanisms:
-        1. **cdpair** (self-collision): distal links vs proximal links
-        2. **extcd** (external): robot links vs obstacles in environment
-        3. **innercd**: held objects vs proximal robot links
+        WRS 的 cc 走 panda3d bitmask 通路，必须**显式**给连杆打上
+        ``bitmask_ext "from"``，``robot.is_collided(obstacle_list=...)`` 对
+        外部障碍才会真正触发；CollisionModel 的 cdprim 默认带 ext "into"，
+        但 CCE 创建时 ``clear_mask=True`` 把链节这边的 mask 全清了，所以
+        不补这一行的话 **任何障碍物都检测不到**（包括桌沿、staging 零件、
+        装配 ghost）。
         """
-        # end effector — use cdelements (the proper way)
-        ee_cces = []
-        for id, cdlnk in enumerate(self.end_effector.cdelements):
-            ee_cces.append(self.cc.add_cce(cdlnk))
-        # manipulator
         mlb = self.cc.add_cce(self.manipulator.jlc.anchor.lnk_list[0])
         ml0 = self.cc.add_cce(self.manipulator.jlc.jnts[0].lnk)
         ml1 = self.cc.add_cce(self.manipulator.jlc.jnts[1].lnk)
         ml2 = self.cc.add_cce(self.manipulator.jlc.jnts[2].lnk)
         ml3 = self.cc.add_cce(self.manipulator.jlc.jnts[3].lnk)
         ml4 = self.cc.add_cce(self.manipulator.jlc.jnts[4].lnk)
-        # self-collision: distal (ee + ml3, ml4) vs proximal (base, ml0, ml1)
-        from_list = ee_cces + [ml3, ml4]
-        into_list = [mlb, ml0, ml1]
+        mlee = self.cc.add_cce(self.end_effector.jlc.anchor.lnk_list[0])
+        el0 = self.cc.add_cce(self.end_effector.jlc.jnts[0].lnk)
+        el1 = self.cc.add_cce(self.end_effector.jlc.jnts[1].lnk)
+
+        # —— 自碰：腕 + 末端 ↔ 肩
+        from_list = [ml4, mlee, el0, el1]
+        into_list = [ml0, ml1]
         self.cc.set_cdpair_by_ids(from_list, into_list)
-        # ext collision: enable manipulator links to collide with obstacles
+
+        # —— 对外障碍：所有"会动"的连杆都要打上 ext "from"
         self.cc.enable_extcd_by_id_list(
-            id_list=[ml0, ml1, ml2, ml3, ml4], type="from")
-        # inner collision: held objects collide with proximal links
+            id_list=[ml1, ml2, ml3, ml4, mlee, el0, el1], type="from")
+        # —— 在手物体（robot.hold 时打 inner "from"）撞自家上臂的检测端
         self.cc.enable_innercd_by_id_list(
-            id_list=[mlb, ml0, ml1, ml2], type="into")
-        # dynamic_ext_list: EE cces for held-object collision checking
-        self.cc.dynamic_ext_list = ee_cces[1:]
-
-
+            id_list=[mlb, ml0, ml1], type="into")
+        self.cc.dynamic_into_list = [mlb, ml0, ml1]
+        self.cc.dynamic_ext_list = []
 
     def fk(self, jnt_values, toggle_jacobian=False, update=False):
         """前向运动学"""
@@ -115,39 +110,44 @@ if __name__ == '__main__':
     base = wd.World(cam_pos=[1.5, 1.5, 1.0], lookat_pos=[0, 0, 0.3])
     robot = PiperSglArm(enable_cc=True)
     robot.change_jaw_width(0)
-    start_conf = np.array([0, 0, 0, 0, 0, 0])
+    # robot.gen_meshmodel(toggle_tcp_frame=True, toggle_jnt_frames=True).attach_to(base)
+    start_conf = np.array([0,
+                           0,
+                           0,
+                           0,
+                           0,
+                           0])
     robot.goto_given_conf(start_conf)
-    robot.gen_meshmodel(toggle_jnt_frames=True, toggle_tcp_frame=True).attach_to(base)
-    tgt_pos = np.array([0, 0.00, 0.7])
-    robot.show_cdprim()
-    print("is robot collided", robot.is_collided())
-    base.run()
-    bound_lower = -40
-    bound_upper = 40
-    grad = 1
-    plane_normal = np.array([1, 0, 0])
-    goal_conf = None
-    print(f"--- Searching IK solutions for position {tgt_pos} ---")
-    for theta in range(bound_lower, bound_upper + 1, grad):
-        hand_x = np.array([0, 0, -1])
-        hand_z = plane_normal
-        hand_y = np.cross(hand_z, hand_x)
-        tgt_rotmat_base = np.array([hand_x, hand_y, hand_z]).T
-        tgt_rotmat = rm.rotmat_from_axangle(hand_y, np.radians(theta)) @ tgt_rotmat_base
-        mgm.gen_frame(tgt_pos, tgt_rotmat).attach_to(base)
-        current_goal_conf = robot.ik(tgt_pos=tgt_pos,
-                                     tgt_rotmat=tgt_rotmat,
-                                     seed_jnt_values=start_conf)
-
-        print(f"Theta={theta}°: {'Found' if current_goal_conf is not None else 'Failed'}")
-
-        if current_goal_conf is not None:
-            goal_conf = current_goal_conf
-            break
-    if goal_conf is not None:
-        robot.goto_given_conf(jnt_values=goal_conf)
-        robot.gen_meshmodel(alpha=1, toggle_tcp_frame=True).attach_to(base)
-    else:
-        print(1111)
-
+    # robot.gen_meshmodel(toggle_jnt_frames=True, toggle_tcp_frame=True,toggle_cdprim=True).attach_to(base)
+    # tgt_pos = np.array([0.7, 0, .13])
+    #
+    # bound_lower = -20
+    # bound_upper = 20
+    # grad = 5
+    # plane_normal = np.array([1, 0, 0])
+    # goal_conf = None
+    # print(f"--- Searching IK solutions for position {tgt_pos} ---")
+    # for theta in range(bound_lower, bound_upper + 1, grad):
+    #     hand_x = np.array([0, 0, -1])
+    #     hand_z = plane_normal
+    #     hand_y = np.cross(hand_z, hand_x)
+    #     tgt_rotmat_base = np.array([hand_x, hand_y, hand_z]).T
+    #     tgt_rotmat = rm.rotmat_from_axangle(hand_y, np.radians(theta)) @ tgt_rotmat_base
+    #     mgm.gen_frame(tgt_pos, tgt_rotmat).attach_to(base)
+    #     current_goal_conf = robot.ik(tgt_pos=tgt_pos,
+    #                                  tgt_rotmat=tgt_rotmat,
+    #                                  seed_jnt_values=start_conf)
+    #
+    #     print(f"Theta={theta}°: {'Found' if current_goal_conf is not None else 'Failed'}")
+    #
+    #     if current_goal_conf is not None:
+    #         goal_conf = current_goal_conf
+    #         break
+    # if goal_conf is not None:
+    #     robot.goto_given_conf(jnt_values=np.array([0, 0, 0, 0, 0, 0]))
+    #     robot.gen_meshmodel(alpha=1, toggle_tcp_frame=True).attach_to(base)
+    # else:
+    #     print(1111)
+    robot.gen_meshmodel(toggle_jnt_frames=True,toggle_tcp_frame=True).attach_to(base)
+    print(robot.is_collided())
     base.run()

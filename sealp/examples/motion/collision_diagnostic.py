@@ -167,8 +167,8 @@ def test_cobotta_reference():
     is_collided_obs = robot.is_collided(obstacle_list=[box])
     print(f"  With obstacle: {is_collided_obs}")
 
-    robot.gen_meshmodel(alpha=0.5, toggle_cdprim=True).attach_to(base)
-    robot.show_cdprim()
+    robot.gen_meshmodel(alpha=0.5, toggle_cdprim=False).attach_to(base)
+    # robot.show_cdprim()
 
     print(f"\nPress ESC to close.")
     base.run()

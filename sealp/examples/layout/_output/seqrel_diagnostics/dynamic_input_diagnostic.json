@@ -1,0 +1,136 @@
+{
+  "dataset": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\_output\\layout_dataset_v2.jsonl",
+  "feature_version": "v2",
+  "sample_indices": [
+    0,
+    1
+  ],
+  "sample_ids": [
+    1783480439473465300,
+    1783480439505477200
+  ],
+  "staging_signatures": [
+    [
+      [
+        0.2206,
+        -0.1611
+      ],
+      [
+        0.1947,
+        -0.335
+      ],
+      [
+        0.2971,
+        -0.5531
+      ],
+      [
+        0.177,
+        0.1765
+      ],
+      [
+        0.4493,
+        -0.516
+      ],
+      [
+        0.3023,
+        -0.3081
+      ],
+      [
+        0.4095,
+        -0.0146
+      ]
+    ],
+    [
+      [
+        0.2206,
+        -0.1611
+      ],
+      [
+        0.2014,
+        -0.3653
+      ],
+      [
+        0.2908,
+        -0.5579
+      ],
+      [
+        0.1932,
+        0.178
+      ],
+      [
+        0.458,
+        -0.5356
+      ],
+      [
+        0.2984,
+        -0.2846
+      ],
+      [
+        0.4362,
+        -0.0523
+      ]
+    ]
+  ],
+  "static_signature_match": true,
+  "sagpn": {
+    "checkpoint": "D:\\Project\\wrs-sealp\\checkpoints\\layout_models_transfer_v3\\sagpn_best.pt",
+    "feas_logit_A": 0.004586383700370789,
+    "feas_logit_B": 0.004586383700370789,
+    "score_pred_A": 0.4198353588581085,
+    "score_pred_B": 0.4198353588581085,
+    "logit_difference": 0.0,
+    "score_difference": 0.0,
+    "outputs_identical_or_near": true,
+    "staging_perturbation_test": {
+      "perturbed_part_index": 1,
+      "staging_before": [
+        0.1947466614503865,
+        -0.3350474496394039
+      ],
+      "staging_after": [
+        0.34474666145038646,
+        -0.4350474496394039
+      ],
+      "logit_diff": 0.0,
+      "score_diff": 0.0,
+      "output_varies": false
+    },
+    "staging_gradient_test": {
+      "max_abs_grad_on_staging_dims": 0.0,
+      "staging_in_computation_graph": false
+    },
+    "uses_dynamic_staging_in_scorer": false,
+    "note": "SAGPN scorer 头使用 static_only(node); staging_xy 在 DYNAMIC 维被置零"
+  },
+  "seqrel": {
+    "checkpoint": "D:\\Project\\wrs-sealp\\checkpoints\\layout_models_repro\\seqrel\\stratified\\seed0\\seqrel_best.pt",
+    "feas_logit_A": 0.07961196452379227,
+    "feas_logit_B": 0.0746079534292221,
+    "score_pred_A": 0.42901766300201416,
+    "score_pred_B": 0.4284801483154297,
+    "logit_difference": 0.00500401109457016,
+    "score_difference": 0.0005375146865844727,
+    "outputs_identical_or_near": false,
+    "staging_perturbation_test": {
+      "perturbed_part_index": 1,
+      "staging_before": [
+        0.1947466614503865,
+        -0.3350474496394039
+      ],
+      "staging_after": [
+        0.34474666145038646,
+        -0.4350474496394039
+      ],
+      "logit_diff": 0.0006643161177635193,
+      "score_diff": 0.00011688470840454102,
+      "output_varies": true
+    },
+    "staging_gradient_test": {
+      "max_abs_grad_on_staging_dims": 0.20453926920890808,
+      "staging_in_computation_graph": true
+    },
+    "uses_dynamic_staging_in_scorer": true,
+    "note": "SeqRel 完整消费 DYNAMIC staging 特征并用于 pairwise 几何"
+  },
+  "conclusion": "SAGPN scorer 对 staging 不敏感 (static-only); SeqRel 对 staging / pairwise 几何敏感。"
+}

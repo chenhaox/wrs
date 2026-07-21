@@ -92,25 +92,42 @@ class TransportPrimitive(MotionPrimitive):
         n = len(goal_pose_list)
         pick_depart_direction = kwargs.get(
             "pick_depart_direction", rm.const.z_ax)
+        place_depart_direction_list = kwargs.get(
+            "place_depart_direction_list", [rm.const.z_ax] * n)
         place_approach_distance_list = kwargs.get(
             "place_approach_distance_list", [approach_distance] * n)
+        pick_depart_dist = kwargs.get("pick_depart_distance", depart_distance)
         place_depart_distance_list = kwargs.get(
             "place_depart_distance_list", [depart_distance] * n)
 
-        mot_data = self._planner.gen_pick_and_place(
+        grasp_obstacle_list = kwargs.get("grasp_obstacle_list")
+        gpp_kwargs = dict(
             obj_cmodel=obj_cmodel,
             grasp_collection=grasp_collection,
             goal_pose_list=goal_pose_list,
             start_jnt_values=start_jnt_values,
             end_jnt_values=end_jnt_values,
             pick_approach_distance=approach_distance,
-            pick_depart_distance=depart_distance,
+            pick_depart_distance=pick_depart_dist,
             pick_depart_direction=pick_depart_direction,
             place_approach_distance_list=place_approach_distance_list,
+            place_depart_direction_list=place_depart_direction_list,
             place_depart_distance_list=place_depart_distance_list,
             obstacle_list=obstacle_list,
+            grasp_obstacle_list=grasp_obstacle_list,
             use_rrt=use_rrt,
         )
+        pick_app_dir = kwargs.get("pick_approach_direction")
+        if pick_app_dir is not None:
+            gpp_kwargs["pick_approach_direction"] = pick_app_dir
+        pa_dir = kwargs.get("place_approach_direction_list")
+        if pa_dir is not None:
+            gpp_kwargs["place_approach_direction_list"] = pa_dir
+        # 透传"宽松度"相关参数到 PickPlacePlanner
+        for _key in ("linear_granularity", "reason_grasps"):
+            if _key in kwargs and kwargs[_key] is not None:
+                gpp_kwargs[_key] = kwargs[_key]
+        mot_data = self._planner.gen_pick_and_place(**gpp_kwargs)
 
         if mot_data is None:
             return PrimitiveResult(

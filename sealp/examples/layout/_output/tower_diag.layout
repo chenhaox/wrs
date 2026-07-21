@@ -1,0 +1,305 @@
+# SEALP Workspace Layout v1.0
+# tower_diag
+
+format_version: '1.0'
+name: tower_diag
+robot_base:
+  pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+assembly_station:
+  pos:
+  - 0.3725
+  - -0.35
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+staging:
+  base_plate:
+    pos:
+    - 0.3725
+    - -0.35
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  post_br:
+    pos:
+    - 0.442517
+    - -0.0531463
+    - 0.0150083
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '-1'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+  post_fr:
+    pos:
+    - 0.269271
+    - -0.585436
+    - 0.0150083
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+    - - !!float '0'
+      - !!float '-1'
+      - !!float '0'
+  post_bl:
+    pos:
+    - 0.371223
+    - -0.0540734
+    - 0.003
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  post_fl:
+    pos:
+    - 0.133524
+    - -0.659986
+    - 0.0150083
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+    - - !!float '0'
+      - !!float '-1'
+      - !!float '0'
+  middle_plate:
+    pos:
+    - 0.365168
+    - -0.766561
+    - 0.0855
+    rotmat:
+    - - !!float '0'
+      - 0.707107
+      - 0.707107
+    - - !!float '0'
+      - 0.707107
+      - -0.707107
+    - - !!float '-1'
+      - !!float '0'
+      - !!float '0'
+  top_cross:
+    pos:
+    - 0.165778
+    - -0.424023
+    - 0.003
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+metadata:
+  search_method: weighted_random_on_work_table
+  l3_pass: false
+  l3_fail_reason: ''
+  l3_skip_parts:
+  - middle_plate
+  score: 0.568164
+  score_components:
+    grasp: 0.811591
+    manip: 0.256154
+    dist: 0.633374
+    rot: 0.293819
+    spatial_y_distribution: 0.825
+  spatial_constraints:
+    min_staging_mesh_clearance: 0.01
+    enforce_order_x_constraint: false
+    order_x_tolerance: 0.03
+    enable_y_side_distribution_score: true
+    force_upright_when_topdown_low: true
+    topdown_min_count: 10
+    upright_rule: if identity topdown(-Z) count < threshold, non-upright initial poses
+      are forbidden
+    topdown_align_cos: 0.82
+    check_l2_pick_quick_motion: false
+    l2_pick_check_parts:
+    - middle_plate
+    l2_pick_check_lift_dist: 0.06
+    l2_pick_check_directions:
+    - z
+    - x_plus
+    - x_minus
+    - y_plus
+    - y_minus
+    l2_pick_check_tilt: 0.35
+    goal_y_side_biased_sampling: true
+    goal_y_side_bias_ratio: 0.75
+    goal_y_side_eps: 0.005
+    goal_y_side_rule: if goal y is larger than other parts, prefer left half table;
+      if smaller, prefer right half table; fallback to full table
+    robot_home_clearance: 0.03
+  weights:
+    grasp: 0.4
+    manip: 0.2
+    dist: 0.25
+    rot: 0.15
+  part_order:
+  - base_plate
+  - post_br
+  - post_fr
+  - post_bl
+  - post_fl
+  - middle_plate
+  - top_cross
+  assembly_region_id: r1_c2
+  assembly_region_rc:
+  - 1
+  - 2
+  assembly_station_pos:
+  - 0.3725
+  - -0.35
+  - !!float '0'
+  preassemble_first_part: true
+  filter_assembly_near_arms: false
+  assembly_region_rule: 3x3 centers are all tried; only preassembled first part collision
+    with arm boxes can reject an assembly center
+  assembly_arm_x_clearance: 0.22
+  assembly_arm_y_clearance: 0.22
+  filter_staging_near_arms: true
+  staging_arm_x_clearance: 0.12
+  staging_arm_y_clearance: 0.12
+  arm_base_xy_map:
+    lft_arm_base:
+    - !!float '0'
+    - !!float '0'
+    rgt_arm_base:
+    - !!float '0'
+    - -0.62
+  grasp_counts:
+    base_plate: 20
+    post_br: 18
+    post_fr: 20
+    post_bl: 49
+    post_fl: 30
+    middle_plate: 73
+    top_cross: 37
+  topdown_counts_identity:
+    post_br: 572
+    post_fr: 572
+    post_bl: 572
+    post_fl: 572
+    middle_plate: 0
+    top_cross: 296
+  arm_choice:
+    base_plate: preassembled
+    post_br: rgt
+    post_fr: rgt
+    post_bl: lft
+    post_fl: lft
+    middle_plate: rgt
+    top_cross: lft
+  pose_tag:
+    base_plate: preassembled_at_assembly_region
+    post_br: rot90_lifted
+    post_fr: rot90_lifted
+    post_bl: identity
+    post_fl: rot90_lifted
+    middle_plate: fs_upright_lifted
+    top_cross: identity
+  rot_name:
+    base_plate: goal_pose
+    post_br: rot90_04
+    post_fr: rot90_08
+    post_bl: identity
+    post_fl: rot90_08
+    middle_plate: fs_03
+    top_cross: identity
+  z_offsets:
+    base_plate: !!float '0'
+    post_br: 0.0150083
+    post_fr: 0.0150083
+    post_bl: 0.003
+    post_fl: 0.0150083
+    middle_plate: 0.0855
+    top_cross: 0.003
+  per_part_dist:
+    base_plate: !!float '0'
+    post_br: 0.248199
+    post_fr: 0.250484
+    post_bl: 0.255113
+    post_fl: 0.314574
+    middle_plate: 0.421162
+    top_cross: 0.268743
+  per_part_manip:
+    base_plate: !!float '0'
+    post_br: 0.0166283
+    post_fr: 0.0169748
+    post_bl: 0.015606
+    post_fl: !!float '0'
+    middle_plate: 0.0129344
+    top_cross: !!float '0'
+  per_part_rot_angle:
+    base_plate: !!float '0'
+    post_br: 1.5708
+    post_fr: 1.5708
+    post_bl: !!float '0'
+    post_fl: 1.5708
+    middle_plate: 1.71777
+    top_cross: !!float '0'
+  table_top_z: !!float '0'
+  table_x_range:
+  - -0.01
+  - 0.47
+  table_y_range:
+  - -0.89
+  - 0.19
+  rotation_lift_rule: z_offset = table_top_z + clearance - rotated_z_min
+  check_robot_home_collision: true
+  strict_initial_robot_collision: true
+  robot_home_collision_rule: all initial objects including preassembled first part
+    must not collide with lft/rgt arm collision boxes at HOME_JV
+  robot_home_clearance_rule: all staging models should keep at least 0.030m AABB clearance
+    from robot home links when link AABBs are available
+  l2_pick_quick_motion_rule: for selected parts, common grasp ids must survive pre-pick
+    / pick / post-pick quick check against dynamic obstacles

@@ -21,7 +21,8 @@ import wrs.basis.robot_math as rm
 import wrs.modeling.geometric_model as mgm
 import wrs.modeling.collision_model as mcm
 import wrs.visualization.panda.world as wd
-import wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper as pg
+# import wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper as pg
+import wrs.robot_sim.end_effectors.grippers.panthera_gripper.panthera_gripper as pg
 from wrs.grasping.grasp import GraspCollection
 
 
@@ -96,15 +97,15 @@ def main():
     # 1. Setup
     # ------------------------------------------------------------------
     base = wd.World(cam_pos=rm.vec(.5, .5, .5), lookat_pos=rm.vec(0, 0, 0))
-    mgm.gen_frame(ax_length=0.3).attach_to(base)
+    # mgm.gen_frame(ax_length=0.3).attach_to(base)
 
-    gripper = pg.PiperGripper()
+    gripper = pg.PantheraGripper()
 
     # ------------------------------------------------------------------
     # 2. Load grasps (plan first if not cached)
     # ------------------------------------------------------------------
-    out_dir = os.path.join(os.path.dirname(__file__), "_output")
-    pickle_path = os.path.join(out_dir, "demo_box_grasps.pickle")
+    out_dir = os.path.join(os.path.dirname(__file__), "totem_grasp")
+    pickle_path = os.path.join(out_dir, "tower_top_cross_grasps.pickle")
 
     if os.path.isfile(pickle_path):
         print(f"Loading grasps from {pickle_path}...")
@@ -142,9 +143,8 @@ def main():
     # 5. Visualize
     # ------------------------------------------------------------------
     # Show the demo object
-    obj_cmodel = mcm.gen_box(xyz_lengths=np.array([0.06, 0.04, 0.03]),
-                             pos=np.array([0, 0, 0.015]))
-    obj_cmodel.rgba = np.array([0.6, 0.5, 0.4, 1.0])
+    obj_cmodel = mcm.CollisionModel(r"D:\Project\wrs-sealp\sealp\assets\models\Totem\model\top_cross.stl")
+    obj_cmodel.rgba = np.array([0.4, 0.4, 0.4, 1.0])
     obj_cmodel.attach_to(base)
 
     # Show grasps (limited for performance)
@@ -156,7 +156,7 @@ def main():
             break
         gripper.grip_at_by_pose(grasp.ac_pos, grasp.ac_rotmat,
                                 grasp.ee_values)
-        gripper.gen_meshmodel(alpha=0.7).attach_to(base)
+        gripper.gen_meshmodel(np.array([0.7,0.7,0.7]),alpha=0.1).attach_to(base)
 
         # Draw approach direction arrow
         a_dir, a_pt = compute_approach_point(grasp)

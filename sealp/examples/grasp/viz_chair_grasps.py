@@ -35,7 +35,10 @@ def main():
 
     # ── Choose which part to visualize ───────────────────────
     # Change this to switch between seat and leg:
-    SHOW_PART = "seat"  # "seat" or "leg"
+    # SHOW_PART = "seat"  # "seat" or "leg"
+
+
+    SHOW_PART = "seat"
 
     if SHOW_PART == "seat":
         stl_path = SEAT_STL
@@ -61,7 +64,7 @@ def main():
     # ── Plan grasps ──────────────────────────────────────────
     print(f"\nPlanning grasps on {SHOW_PART}...")
     grasp_collection, gripper = plan_grasps(
-        obj, max_samples=80,
+        obj, max_samples=200,
         rotation_interval=rm.radians(30),
     )
     print(f"Planned {len(grasp_collection)} grasps.\n")

@@ -102,8 +102,8 @@ def main():
     # 2. Object — demo box
     # ------------------------------------------------------------------
     obj = mcm.gen_box(xyz_lengths=np.array([0.06, 0.04, 0.03]))
-    obj.rgba = np.array([0.6, 0.5, 0.4, 1.0])
-    pick_pos = np.array([0.25, 0.10, 0.015])
+    obj.rgba = np.array([1, 0 ,0, 1.0])
+    pick_pos = np.array([0.25, 0.20, 0.015])
     pick_rotmat = np.eye(3)
     obj.pos = pick_pos
     obj.rotmat = pick_rotmat
@@ -111,7 +111,7 @@ def main():
 
     # Goal poses (show semi-transparent ghosts)
     goal_pose_list = [
-        (np.array([0.30, -0.10, 0.015]), rm.rotmat_from_euler(0, 0, 0)),
+        (np.array([0.25, -0.20, 0.015]), rm.rotmat_from_euler(0, 0, 0)),
     ]
     for pos, rot in goal_pose_list:
         ghost = obj.copy()
@@ -141,11 +141,17 @@ def main():
     else:
         # Plan grasps using the grasp module
         from sealp.examples.grasp.planning import plan_grasps
-        grasp_collection, _ = plan_grasps(obj, max_samples=50)
+        import wrs.robot_sim.end_effectors.grippers.piper_gripper.piper_gripper as pg
+        gripper = pg.PiperGripper()
+        temp_pos = obj.pos
+        temp_rotmat = obj.rotmat
+        obj.pos = np.zeros(3)
+        obj.rotmat = np.eye(3)
+        grasp_collection, _ = plan_grasps(obj, gripper=gripper, max_samples=100)
+        obj.pos = temp_pos
+        obj.rotmat = temp_rotmat
         os.makedirs(out_dir, exist_ok=True)
         grasp_collection.save_to_disk(file_name=grasp_path)
-
-    print(f"Grasps: {len(grasp_collection)}")
 
     # ------------------------------------------------------------------
     # 5. Plan pick-and-place motion
@@ -153,6 +159,12 @@ def main():
     start_conf = robot.get_jnt_values()
 
     print("Planning pick-and-place motion...")
+
+    for grasp in grasp_collection:
+        robot.end_effector.grip_at_by_pose(obj.pos + obj.rotmat @ grasp.ac_pos,
+                                           obj.rotmat @ grasp.ac_rotmat,
+                                           grasp.ee_values)
+
     mot_data = ppp_planner.gen_pick_and_place(
         obj_cmodel=obj,
         end_jnt_values=start_conf,
