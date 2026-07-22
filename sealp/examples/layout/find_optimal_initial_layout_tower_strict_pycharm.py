@@ -292,6 +292,10 @@ class LayoutCandidate:
     pose_tag: Dict[str, str] = field(default_factory=dict)
     rot_name: Dict[str, str] = field(default_factory=dict)
     arm_choice: Dict[str, str] = field(default_factory=dict)
+    # Optional: restrict evaluate_layout to a specific rotation candidate per part
+    # (by rot_name). Used by the GA so the pose it scored in the proxy is exactly
+    # the pose L2 verifies (avoids proxy/L2 pose mismatch).
+    forced_rot_name: Dict[str, str] = field(default_factory=dict)
     grasp_counts: Dict[str, int] = field(default_factory=dict)
     per_part_dist: Dict[str, float] = field(default_factory=dict)
     per_part_manip: Dict[str, float] = field(default_factory=dict)
@@ -2242,10 +2246,21 @@ class WeightedInitialLayoutSearcher:
         layout.assembly_station_pos = self.fixture_pos.copy()
         layout.assembly_station_rotmat = self.fixture_rotmat.copy()
 
-        # 先用 identity 候选初始化所有零件，这样 step0 的 obstacle 也是有效随机位置。
+        # 先初始化所有零件的 staging pose, 使其成为后续步骤的有效障碍。
+        # 若 layout 提供了 forced_rot_name(如 BSFS/GA 已选定姿态), 则用该姿态初始化,
+        # 这样"尚未处理"的零件在每一步 grasp 推理时也处于其真实 staging 姿态,
+        # 与 BSFS 单步 oracle 的动态障碍模型一致(否则默认 identity 会造成
+        # oracle 认证通过但 witness 因障碍姿态不同而 no_common_gids 的假失败)。
+        _forced_init = getattr(layout, "forced_rot_name", {}) or {}
         for pid in self.part_order:
             if pid in layout.xy:
-                self._apply_staging_pose(pid, layout.xy[pid], self.rot_cands[pid][0])
+                _init_cand = self.rot_cands[pid][0]
+                if pid in _forced_init:
+                    for _c in self.rot_cands[pid]:
+                        if str(getattr(_c, "rot_name", "")) == str(_forced_init[pid]):
+                            _init_cand = _c
+                            break
+                self._apply_staging_pose(pid, layout.xy[pid], _init_cand)
 
         placed = set()
         fail_detail = {}
@@ -2291,7 +2306,17 @@ class WeightedInitialLayoutSearcher:
                 "reason_exception": 0,
             }
 
-            for cand in self.rot_cands[pid]:
+            # GA 可指定强制姿态(forced_rot_name)：只评估该 rot_name 的候选，
+            # 保证 proxy 打分的姿态与 L2 验证的姿态一致。
+            _rot_cands_for_pid = self.rot_cands[pid]
+            _forced = getattr(layout, "forced_rot_name", {}) or {}
+            if pid in _forced:
+                _restricted = [c for c in _rot_cands_for_pid
+                               if str(getattr(c, "rot_name", "")) == str(_forced[pid])]
+                if _restricted:
+                    _rot_cands_for_pid = _restricted
+
+            for cand in _rot_cands_for_pid:
                 # 硬约束：如果原始姿态 topdown(-Z) 抓取数太少，
                 # 则禁止 identity / 平放姿态，只允许 upright / 侧立候选。
                 upright_hit = self._upright_hard_constraint_reason(pid, cand)
