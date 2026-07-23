@@ -35,7 +35,7 @@ assembly:
   part: seat
   parent: fixture
   rel_pos:
-  - 0.3
+  - !!float '0'
   - !!float '0'
   - !!float '0'
   rel_rotmat:
@@ -54,8 +54,8 @@ assembly:
   part: leg_bl
   parent: seat
   rel_pos:
-  - 0.11
-  - 0.11
+  - 0.07
+  - 0.07
   - 0.02
   rel_rotmat:
   - - !!float '1'
@@ -74,8 +74,8 @@ assembly:
   part: leg_br
   parent: seat
   rel_pos:
-  - 0.11
-  - -0.11
+  - 0.07
+  - -0.07
   - 0.02
   rel_rotmat:
   - - !!float '1'
@@ -94,8 +94,8 @@ assembly:
   part: leg_fl
   parent: seat
   rel_pos:
-  - -0.11
-  - 0.11
+  - -0.07
+  - 0.07
   - 0.02
   rel_rotmat:
   - - !!float '1'
@@ -114,8 +114,8 @@ assembly:
   part: leg_fr
   parent: seat
   rel_pos:
-  - -0.11
-  - -0.11
+  - -0.07
+  - -0.07
   - 0.02
   rel_rotmat:
   - - !!float '1'
